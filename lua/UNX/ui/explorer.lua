@@ -1,3 +1,4 @@
+-- lua/UNX/ui/explorer.lua
 local Split = require("nui.split")
 local Layout = require("nui.layout")
 
@@ -33,9 +34,11 @@ function M.setup(opts)
     vim.api.nvim_create_autocmd({ "BufEnter", "BufWritePost" }, {
         group = state.augroup,
         callback = function()
-            -- 修正: layout.winid ではなく、実際のコンポーネント(class_func_split)のウィンドウIDをチェックする
+            -- ★修正: C/C++ ファイル以外は即リターン (無駄な更新を防ぐ)
+            local ft = vim.bo.filetype
+            if ft ~= "c" and ft ~= "cpp" then return end
+
             if state.class_func_split and state.class_func_split.winid and vim.api.nvim_win_is_valid(state.class_func_split.winid) then
-                -- print("[UNX-AUTO] Triggering update for winid: " .. tostring(state.class_func_split.winid)) -- デバッグ用
                 ViewSymbols.update(state.class_func_tree, state.class_func_split.winid)
             end
         end,
@@ -82,10 +85,10 @@ function M.open()
     -- 初回表示
     state.uproject_tree:render()
     
-    -- ★修正: 初回はカレントバッファ（UNXを開く直前にいたバッファ）を対象にするため、少し遅延させるか明示的に取得
-    -- ただし open 直後はフォーカスが UNX に移っているため、直前のウィンドウのバッファを取得するのが理想
-    -- ここではシンプルに update を呼ぶ（開いた直後の update は unx-explorer なので無視されるが、戻った時に BufEnter が走る）
-    ViewSymbols.update(state.class_func_tree, state.class_func_split.winid)
+    -- 初回更新 (開いた直後のファイルがC++なら更新)
+    if vim.bo.filetype == "c" or vim.bo.filetype == "cpp" then
+        ViewSymbols.update(state.class_func_tree, state.class_func_split.winid)
+    end
 
     -- キーマップ設定: 終了
     local function map_quit(split)

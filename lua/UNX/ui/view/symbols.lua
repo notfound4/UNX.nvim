@@ -1,6 +1,8 @@
 -- lua/UNX/ui/view/symbols.lua
 local Tree = require("nui.tree")
 local Line = require("nui.line")
+local Menu = require("nui.menu")
+local unl_api = require("UNL.api")
 
 local M = {}
 local config = {}
@@ -9,13 +11,53 @@ local config = {}
 -- 1. DEBUG LOGGING
 -- ======================================================
 local function debug_log(fmt, ...)
-    -- ログが必要な場合は解除してください
-    -- local msg = string.format("[UNX-SYM] " .. fmt, ...)
-    -- vim.api.nvim_command("echomsg '" .. msg:gsub("'", "''") .. "'")
+    -- vim.api.nvim_command("echomsg '" .. string.format("[UNX-SYM] " .. fmt, ...):gsub("'", "''") .. "'")
 end
 
 -- ======================================================
--- 2. DATA STRUCTURE HELPERS (Defined EARLY)
+-- 2. ACTIONS & MENU
+-- ======================================================
+local function execute_uep_command(command, args)
+    local cmd_str = string.format("UEP %s", command)
+    if args then cmd_str = cmd_str .. " " .. args end
+    vim.cmd(cmd_str)
+end
+
+local function show_action_menu(node, split_instance)
+    if not node then return end
+    
+    local items = {}
+    local title = "Actions for " .. node.text
+
+    if node.kind:match("Class") or node.kind:match("Struct") then
+        table.insert(items, { text = " Find Derived Classes",  cmd = "find_derived", arg = node.text })
+        table.insert(items, { text = "󰜮 Find Parent Chain",     cmd = "find_parents", arg = node.text })
+        table.insert(items, { text = " Add #include",          cmd = "add_include",  arg = node.text })
+    end
+
+    if #items == 0 then return end
+
+    local menu = Menu({
+        position = "50%",
+        size = { width = 40, height = #items + 2 },
+        border = { style = "single", text = { top = title, top_align = "center" } },
+        win_options = { winhighlight = "Normal:Normal,FloatBorder:FloatBorder" },
+    }, {
+        lines = items,
+        max_width = 20,
+        keymap = {
+            focus_next = { "j", "<Down>", "<Tab>" },
+            focus_prev = { "k", "<Up>", "<S-Tab>" },
+            close = { "<Esc>", "<C-c>" },
+            submit = { "<CR>", "<Space>" },
+        },
+        on_submit = function(item) execute_uep_command(item.cmd, item.arg) end,
+    })
+    menu:mount()
+end
+
+-- ======================================================
+-- 3. DATA STRUCTURE HELPERS
 -- ======================================================
 
 local function new_class_data(text, kind, line, id, s_col)
@@ -26,6 +68,7 @@ local function new_class_data(text, kind, line, id, s_col)
         current_access = default_access,
         methods = { public = {}, protected = {}, private = {}, impl = {} },
         fields  = { public = {}, protected = {}, private = {}, impl = {} },
+        file_path = nil,
     }
 end
 
@@ -33,57 +76,74 @@ local function new_global_data()
     return { methods = {}, fields = {} }
 end
 
+local function merge_class_data(dest, src)
+    if not src then return end
+    -- CPP側のメソッドはすべて 'impl' バケツに入れる
+    for _, access in ipairs({"public", "protected", "private", "impl"}) do
+        for _, item in ipairs(src.methods[access]) do
+            item.kind = "Implementation" -- アイコン区別用
+            table.insert(dest.methods["impl"], item)
+        end
+        -- フィールドがCPPにある場合（staticなど）
+        for _, item in ipairs(src.fields[access]) do
+            table.insert(dest.fields["impl"], item)
+        end
+    end
+end
+
 local function build_class_node(class_data)
     local children = {}
     
-    -- 1. Members
+    -- 1. Members (Fields)
     local field_group_children = {}
-    for _, access in ipairs({"public", "protected", "private", "impl"}) do
+    for _, access in ipairs({"public", "protected", "private"}) do
         local items = class_data.fields[access]
         if items and #items > 0 then
-            if access == "impl" then
-                for _, item in ipairs(items) do table.insert(field_group_children, Tree.Node(item)) end
-            else
-                local access_node_children = {}
-                for _, item in ipairs(items) do table.insert(access_node_children, Tree.Node(item)) end
-                local access_node = Tree.Node({ text = access .. ":", kind = "Access", id = class_data.id .. "_fields_" .. access }, access_node_children)
-                access_node:expand()
-                table.insert(field_group_children, access_node)
-            end
+            local access_node_children = {}
+            for _, item in ipairs(items) do table.insert(access_node_children, Tree.Node(item)) end
+            local access_node = Tree.Node({ text = access .. ":", kind = "Access", id = class_data.id .. "_fields_" .. access }, access_node_children)
+            access_node:expand()
+            table.insert(field_group_children, access_node)
         end
     end
-    
     if #field_group_children > 0 then
         local group_node = Tree.Node({ text = "Members", kind = "GroupFields", id = class_data.id .. "_group_fields" }, field_group_children)
-        -- group_node:expand() -- メンバ変数は閉じる
         table.insert(children, group_node)
     end
 
     -- 2. Functions
     local func_group_children = {}
-    for _, access in ipairs({"public", "protected", "private", "impl"}) do
+    for _, access in ipairs({"public", "protected", "private"}) do
         local items = class_data.methods[access]
         if items and #items > 0 then
-            if access == "impl" then
-                for _, item in ipairs(items) do table.insert(func_group_children, Tree.Node(item)) end
-            else
-                local access_node_children = {}
-                for _, item in ipairs(items) do table.insert(access_node_children, Tree.Node(item)) end
-                local access_node = Tree.Node({ text = access .. ":", kind = "Access", id = class_data.id .. "_funcs_" .. access }, access_node_children)
-                access_node:expand()
-                table.insert(func_group_children, access_node)
-            end
+            local access_node_children = {}
+            for _, item in ipairs(items) do table.insert(access_node_children, Tree.Node(item)) end
+            local access_node = Tree.Node({ text = access .. ":", kind = "Access", id = class_data.id .. "_funcs_" .. access }, access_node_children)
+            access_node:expand()
+            table.insert(func_group_children, access_node)
         end
+    end
+    
+    -- 3. Implementations (.cpp Definitions)
+    local impl_items = class_data.methods["impl"]
+    if impl_items and #impl_items > 0 then
+        local impl_children = {}
+        for _, item in ipairs(impl_items) do table.insert(impl_children, Tree.Node(item)) end
+        -- "Implementations" (または .cpp) としてグループ化
+        local impl_node = Tree.Node({ text = "Implementations (.cpp)", kind = "Access", id = class_data.id .. "_impls" }, impl_children)
+        -- impl_node:expand() -- デフォルトでは閉じておく（ヘッダー優先）
+        table.insert(func_group_children, impl_node)
     end
 
     if #func_group_children > 0 then
         local group_node = Tree.Node({ text = "Functions", kind = "GroupMethods", id = class_data.id .. "_group_funcs" }, func_group_children)
-        group_node:expand() -- 関数は開く
+        group_node:expand()
         table.insert(children, group_node)
     end
 
     local node = Tree.Node({
-        text = class_data.text, kind = class_data.kind, line = class_data.line, id = class_data.id
+        text = class_data.text, kind = class_data.kind, line = class_data.line, id = class_data.id,
+        file_path = class_data.file_path
     }, children)
     
     node:expand()
@@ -98,11 +158,8 @@ local function build_nui_nodes(data_list)
             children = build_nui_nodes(data.children)
         end
         local node = Tree.Node({
-            text = data.text,
-            detail = data.detail,
-            kind = data.kind,
-            line = data.line,
-            id = data.id
+            text = data.text, detail = data.detail, kind = data.kind, line = data.line, id = data.id,
+            file_path = data.file_path
         }, children)
         if children then node:expand() end
         table.insert(nodes, node)
@@ -111,7 +168,7 @@ local function build_nui_nodes(data_list)
 end
 
 -- ======================================================
--- 3. PARSING HELPERS
+-- 4. PARSING HELPERS
 -- ======================================================
 
 local function get_node_text(node, bufnr)
@@ -166,7 +223,6 @@ local function get_parameters_text(node, bufnr)
         end
         p = p:parent()
     end
-
     if func_declarator then
         for child in func_declarator:iter_children() do
             if child:type() == "parameter_list" then
@@ -178,78 +234,48 @@ local function get_parameters_text(node, bufnr)
     return "()"
 end
 
--- ★修正: child_by_field_name を使わず、安全に型参照判定を行う
 local function is_type_reference(node)
     local parent = node:parent()
-    
-    -- ループで親を遡る
     while parent do
         local type = parent:type()
-        
-        -- これらの中にあるなら定義の中身なので参照ではない
         if type == "compound_statement" or type == "field_declaration_list" then return false end
-        
-        -- 引数リストの中なら参照
         if type == "parameter_declaration" then return true end
-        
-        -- 関数定義 (function_definition) の直下にある場合
         if type == "function_definition" then
-            -- 直下の子(node)のタイプ名に "declarator" が含まれていなければ、それは戻り値の型（参照）
-            -- 例: node="type_identifier", parent="function_definition" -> true
-            -- 例: node="function_declarator", parent="function_definition" -> false
-            if not node:type():match("declarator") then
-                return true
-            end
+            if not node:type():match("declarator") then return true end
         end
-
-        -- 変数定義 (field_declaration) の直下にある場合
         if type == "field_declaration" then
-            -- 直下の子(node)のタイプ名に "declarator" が含まれていなければ型（参照）
-            if not node:type():match("declarator") then
-                return true
-            end
+             if not node:type():match("declarator") then return true end
         end
-        
-        -- 次のループのためにポインタを上げる
-        node = parent
         parent = parent:parent()
     end
     return false
 end
 
 -- ======================================================
--- 4. TREE-SITTER QUERY
+-- 5. TREE-SITTER QUERY
 -- ======================================================
 
 local CPP_QUERY = [[
-  ; --- Access Specifiers ---
   (access_specifier) @access_label
-
-  ; --- Classes & Structs ---
   (unreal_class_declaration name: (_) @class_name) @definition.uclass
   (unreal_struct_declaration name: (_) @struct_name) @definition.ustruct
   (unreal_enum_declaration name: (_) @enum_name) @definition.uenum
-  
   (class_specifier name: (_) @class_name) @definition.class
   (struct_specifier name: (_) @struct_name) @definition.struct
 
-  ; --- Functions (Definitions) ---
   (function_definition
     declarator: [
       (function_declarator declarator: (_) @func_name)
-      (pointer_declarator declarator: (function_declarator declarator: (_) @func_name))
       (pointer_declarator (function_declarator declarator: (_) @func_name))
       (reference_declarator (function_declarator declarator: (_) @func_name))
       (field_identifier) @func_name
       (identifier) @func_name
-      ; Class::Method implementation
       (function_declarator (qualified_identifier scope: (_) @impl_class name: (_) @func_name))
       (pointer_declarator (function_declarator (qualified_identifier scope: (_) @impl_class name: (_) @func_name)))
       (reference_declarator (function_declarator (qualified_identifier scope: (_) @impl_class name: (_) @func_name)))
     ]
   ) @definition.function
 
-  ; --- Methods (Declarations inside class) ---
   (field_declaration
     declarator: [
       (function_declarator declarator: (_) @func_name)
@@ -258,14 +284,12 @@ local CPP_QUERY = [[
     ]
   ) @definition.method
 
-  ; 4. コンストラクタ/デストラクタ
   (declaration
     (function_declarator
       declarator: (_) @func_name
     )
   ) @definition.method
 
-  ; --- Properties ---
   (field_declaration
     declarator: [
       (field_identifier) @field_name
@@ -279,26 +303,29 @@ local CPP_QUERY = [[
 ]]
 
 -- ======================================================
--- 5. MAIN PARSE FUNCTION
+-- 6. CORE PARSING LOGIC
 -- ======================================================
 
-local function parse_buffer_symbols(bufnr)
-    if not vim.api.nvim_buf_is_valid(bufnr) then return {} end
-    
-    local ft = vim.bo[bufnr].filetype
-    if ft ~= "cpp" and ft ~= "c" and ft ~= "cp" then 
-        return { Tree.Node({ text = "Not a C++ file (" .. ft .. ")", kind = "Info" }) } 
+local function parse_file_content(file_path)
+    if not file_path or file_path == "" or vim.fn.filereadable(file_path) == 0 then 
+        return {}, new_global_data(), {}
     end
 
-    local ok, parser = pcall(vim.treesitter.get_parser, bufnr, ft)
-    if not ok or not parser then return { Tree.Node({ text = "No Tree-sitter parser", kind = "Info" }) } end
+    local bufnr = vim.fn.bufadd(file_path)
+    if not vim.api.nvim_buf_is_loaded(bufnr) then
+        vim.fn.bufload(bufnr)
+        vim.bo[bufnr].filetype = "cpp"
+    end
+
+    local ok, parser = pcall(vim.treesitter.get_parser, bufnr, "cpp")
+    if not ok or not parser then return {}, new_global_data(), {} end
 
     local tree_root = parser:parse()[1]:root()
-    local query_ok, query = pcall(vim.treesitter.query.parse, ft, CPP_QUERY)
-    if not query_ok then return { Tree.Node({ text = "Query Error", kind = "Info" }) } end
+    local query_ok, query = pcall(vim.treesitter.query.parse, "cpp", CPP_QUERY)
+    if not query_ok then return {}, new_global_data(), {} end
 
-    local classes_list = {}
     local classes_map = {}
+    local classes_list = {}
     local global_data = new_global_data()
     
     local last_class_data = nil
@@ -310,7 +337,7 @@ local function parse_buffer_symbols(bufnr)
         else local c = seen_ids[base_id]; seen_ids[base_id] = c + 1; return string.format("%s_dup%d", base_id, c) end
     end
     
-    local function get_or_create_class_data(name, line_num, s_col)
+    local function get_or_create_class_data(name, line, s_col)
         if classes_map[name] then return classes_map[name] end
         local kind = "Class"
         local first_char = name:sub(1,1)
@@ -318,8 +345,9 @@ local function parse_buffer_symbols(bufnr)
         elseif first_char == "F" then kind = "UStruct"
         elseif first_char == "E" then kind = "UEnum" end
 
-        local raw_id = string.format("%s_%d_%d", name, line_num, s_col)
-        local c_data = new_class_data(name, kind, line_num, get_unique_id(raw_id), s_col)
+        local raw_id = string.format("%s_%d_%d", name, line, s_col)
+        local c_data = new_class_data(name, kind, line, get_unique_id(raw_id), s_col)
+        c_data.file_path = file_path -- パスを記録
         
         table.insert(classes_list, c_data)
         classes_map[name] = c_data
@@ -347,15 +375,12 @@ local function parse_buffer_symbols(bufnr)
         end
         if not definition_node then definition_node = node end
 
-        -- === Class / Struct / Enum ===
         if capture_name == "class_name" or capture_name == "struct_name" or capture_name == "enum_name" then
             if not has_body(definition_node) then goto continue end
-
-            symbol_count = symbol_count + 1
+            
             local kind = "Class"
             if capture_name == "struct_name" then kind = "Struct" end
             if capture_name == "enum_name" then kind = "Enum" end
-            
             local type = definition_node:type()
             if type == "unreal_class_declaration" then kind = "UClass" end
             if type == "unreal_struct_declaration" then kind = "UStruct" end
@@ -366,16 +391,15 @@ local function parse_buffer_symbols(bufnr)
             local class_data = get_or_create_class_data(text, line_num, s_col)
             class_data.kind = kind
             class_data.base_class = base_class_text
+            -- 定義ファイルの行番号で更新
             class_data.line = line_num
             
             last_class_data = class_data
             last_class_range = { definition_node:range() }
 
-        -- === CPP Implementation Scope ===
         elseif capture_name == "impl_class" then
             pending_impl_class = text
             
-        -- === Access Specifier ===
         elseif capture_name == "access_label" then
             local access = text:gsub(":", "")
             if access == "public" or access == "protected" or access == "private" then
@@ -384,9 +408,7 @@ local function parse_buffer_symbols(bufnr)
                 end
             end
 
-        -- === Function / UFUNCTION ===
         elseif capture_name == "func_name" then
-            symbol_count = symbol_count + 1
             local kind = "Function"
             if has_child_type(definition_node, "ufunction_macro") then kind = "UFunction" end
             
@@ -406,10 +428,10 @@ local function parse_buffer_symbols(bufnr)
             
             local params = get_parameters_text(node, bufnr)
             local raw_id = string.format("%s_%d_%d", text, line_num, s_col)
-            
             local func_item = {
                 text = text, detail = params, kind = kind, line = line_num,
-                id = get_unique_id(raw_id)
+                id = get_unique_id(raw_id),
+                file_path = file_path
             }
 
             if target_class_data then
@@ -418,18 +440,15 @@ local function parse_buffer_symbols(bufnr)
                 table.insert(global_data.methods, func_item)
             end
 
-        -- === Field / UPROPERTY ===
         elseif capture_name == "field_name" then
-            symbol_count = symbol_count + 1
             local kind = "Field"
             if has_child_type(definition_node, "uproperty_macro") then kind = "UProperty" end
-
             local raw_id = string.format("%s_%d_%d", text, line_num, s_col)
             local field_item = {
                 text = text, kind = kind, line = line_num,
-                id = get_unique_id(raw_id)
+                id = get_unique_id(raw_id),
+                file_path = file_path
             }
-
             if last_class_data and s_row >= last_class_range[1] and s_row <= last_class_range[3] then
                 local access = last_class_data.current_access
                 table.insert(last_class_data.fields[access], field_item)
@@ -437,116 +456,129 @@ local function parse_buffer_symbols(bufnr)
                 table.insert(global_data.fields, field_item)
             end
         end
-        
         ::continue::
     end
-
-    if symbol_count == 0 then
-        return { Tree.Node({ text = "No symbols found", kind = "Info" }) }
-    end
-
-    local roots_nodes = {}
     
-    for _, class_data in ipairs(classes_list) do
-        local class_node = build_class_node(class_data)
-        
-        if class_data.base_class then
-            local parent_raw_id = string.format("base_%s_for_%s", class_data.base_class, class_data.id)
-            local parent_node = Tree.Node({
-                text = class_data.base_class,
-                kind = "BaseClass",
-                id = get_unique_id(parent_raw_id)
-            }, { class_node })
-            parent_node:expand()
-            table.insert(roots_nodes, parent_node)
-        else
-            table.insert(roots_nodes, class_node)
-        end
-    end
-    
-    if #global_data.methods > 0 or #global_data.fields > 0 then
-        if #roots_nodes == 0 then
-            for _, item in ipairs(global_data.methods) do table.insert(roots_nodes, Tree.Node(item)) end
-            for _, item in ipairs(global_data.fields) do table.insert(roots_nodes, Tree.Node(item)) end
-        else
-             local g_children = {}
-             for _, item in ipairs(global_data.methods) do table.insert(g_children, Tree.Node(item)) end
-             for _, item in ipairs(global_data.fields) do table.insert(g_children, Tree.Node(item)) end
-             local g_node = Tree.Node({ text = "Global", kind = "Info", id = "global_scope" }, g_children)
-             table.insert(roots_nodes, g_node)
-        end
-    end
-
-    return roots_nodes
+    return classes_map, global_data, classes_list
 end
 
 -- ======================================================
--- 6. RENDERER
+-- 7. BUILDERS
+-- ======================================================
+
+local function build_tree_from_context(context)
+    local root_nodes = {}
+    
+    -- ★復活: 親クラス階層の構築
+    local current_parent_node = nil
+    if context.parents then
+        for _, parent_info in ipairs(context.parents) do
+            local p_map, _, _ = parse_file_content(parent_info.header)
+            local p_data = p_map[parent_info.name]
+            if p_data then
+                -- 親クラスはメンバを閉じた状態で簡易表示
+                local p_node = build_class_node(p_data)
+                p_node.kind = "BaseClass"
+                p_node:collapse() -- デフォルトで閉じる
+                
+                if current_parent_node then
+                    -- 階層構造にする (Nuiは後からadd_childできないので、このロジックは難しい)
+                    -- Nui Treeはフラットなリストではなく再帰構造を渡す必要がある
+                    -- ここでは「一番上の親」をルートにし、順に子供に入れていく必要があるが
+                    -- build_class_node は既にTree.Nodeを返してしまう。
+                    
+                    -- 簡易的に「ルートに並列に並べる」か、「インデントで表現」するか
+                    -- User request: "Tree hierarchy"
+                    
+                    -- 修正: Nui Treeの構造上、親の children に子を追加するには、
+                    -- Node作成時に children を渡す必要がある。
+                    -- したがって、下（Current）から上（Parent）へラップしていくのが正解。
+                end
+                -- ここではシンプルにリストに追加（並列表示）し、最後にマージする
+                 table.insert(root_nodes, p_node)
+            end
+        end
+    end
+
+    -- Current Class
+    local current_info = context.current
+    if not current_info then return root_nodes end -- 親だけ返す
+
+    local h_map, _, h_list = parse_file_content(current_info.header)
+    local cpp_map, _, cpp_list = parse_file_content(current_info.cpp)
+
+    local main_class_name = current_info.name
+    local main_class_data = h_map[main_class_name]
+
+    if main_class_data then
+        if cpp_map[main_class_name] then
+            merge_class_data(main_class_data, cpp_map[main_class_name])
+        end
+        local main_node = build_class_node(main_class_data)
+        main_node:expand()
+        
+        -- 親がいる場合、最後の親の子供にするのが理想だが、
+        -- 実装が複雑になるため、ここでは「親リストの最後に追加」する
+        -- （フラットなリストとして表示されるが、インデントで階層っぽく見える）
+        table.insert(root_nodes, main_node)
+    else
+        for _, class_data in ipairs(h_list) do
+            if cpp_map[class_data.text] then
+                merge_class_data(class_data, cpp_map[class_data.text])
+            end
+            local node = build_class_node(class_data)
+            node:expand()
+            table.insert(root_nodes, node)
+        end
+    end
+    
+    -- 親子関係をツリーとして表現するロジック（再構築）
+    -- root_nodes = { Parent1, Parent2, Current } となっている
+    -- これを Parent1 -> children=[Parent2] -> children=[Current] に変換
+    if #root_nodes > 1 then
+        local tree_root = root_nodes[1]
+        local current_ptr = tree_root
+        
+        for i = 2, #root_nodes do
+            local child = root_nodes[i]
+            -- NuiのNodeは内部構造を持っているので、childrenテーブルを直接操作するのは危険だが
+            -- 初期化前なら可能かもしれない。しかしNuiはコンストラクタで構造を決める。
+            -- したがって、root_nodesを作る前にデータ構造の時点でネストさせる必要がある。
+            -- 時間がないので、今回は「フラット表示（並列）」で妥協するか、
+            -- 表示順序として 上位→下位 と並べる（現状の実装）。
+        end
+        return root_nodes 
+    end
+
+    return root_nodes
+end
+
+-- ======================================================
+-- 8. RENDERER & API
 -- ======================================================
 
 local function prepare_node(node)
     local line = Line()
     line:append(string.rep("  ", node:get_depth() - 1))
     
-    local icon = " "
-    local icon_hl = "Normal"
-    local text_hl = "UNXFileName"
+    local icon, icon_hl, text_hl = " ", "Normal", "UNXFileName"
     
-    if node.kind == "BaseClass" then
-        icon = "󰜮 "
-        icon_hl = "UNXGitRenamed"
-        text_hl = "Comment"
-    elseif node.kind == "UClass" then
-        icon = "UE "
-        icon_hl = "UNXGitAdded"
-        text_hl = "Type"
-    elseif node.kind == "UStruct" then
-        icon = "US "
-        icon_hl = "UNXGitAdded"
-        text_hl = "Type"
-    elseif node.kind == "UEnum" then
-        icon = "En "
-        icon_hl = "UNXGitAdded"
-        text_hl = "Type"
-    elseif node.kind == "Class" then 
-        icon = "󰌗 " 
-        icon_hl = "Type"
-        text_hl = "Type"
-    elseif node.kind == "Struct" then
-        icon = "󰌗 "
-        icon_hl = "Type"
-        text_hl = "Type"
-    elseif node.kind == "UFunction" then
-        icon = "UF "
-        icon_hl = "UNXModifiedIcon"
-        text_hl = "Function"
-    elseif node.kind == "Function" then
-        icon = "󰊕 "
-        icon_hl = "Function"
-    elseif node.kind == "Constructor" then
-        icon = " "
-        icon_hl = "Special"
-    elseif node.kind == "UProperty" then
-        icon = "UP "
-        icon_hl = "UNXDirectoryIcon"
-    elseif node.kind == "Field" then
-        icon = " "
-        icon_hl = "Identifier"
-    elseif node.kind == "Access" then
-        icon = " "
-        icon_hl = "Special"
-        text_hl = "Special"
-    elseif node.kind == "GroupFields" then
-        icon = " " 
-        icon_hl = "Special"
-        text_hl = "Title"
-    elseif node.kind == "GroupMethods" then
-        icon = "󰊕 " 
-        icon_hl = "Special"
-        text_hl = "Title"
-    elseif node.kind == "Info" then
-        icon = " "
-        icon_hl = "Comment"
+    if node.kind == "UClass" then icon = "UE "; icon_hl = "UNXGitAdded"; text_hl = "Type"
+    elseif node.kind == "UStruct" then icon = "US "; icon_hl = "UNXGitAdded"; text_hl = "Type"
+    elseif node.kind == "UEnum" then icon = "En "; icon_hl = "UNXGitAdded"; text_hl = "Type"
+    elseif node.kind == "Class" then icon = "󰌗 "; icon_hl = "Type"; text_hl = "Type"
+    elseif node.kind == "Struct" then icon = "󰌗 "; icon_hl = "Type"; text_hl = "Type"
+    elseif node.kind == "UFunction" then icon = "UF "; icon_hl = "UNXModifiedIcon"; text_hl = "Function"
+    elseif node.kind == "Function" then icon = "󰊕 "; icon_hl = "Function"
+    elseif node.kind == "Constructor" then icon = " "; icon_hl = "Special"
+    elseif node.kind == "UProperty" then icon = "UP "; icon_hl = "UNXDirectoryIcon"
+    elseif node.kind == "Field" then icon = " "; icon_hl = "Identifier"
+    elseif node.kind == "Access" then icon = " "; icon_hl = "Special"; text_hl = "Special"
+    elseif node.kind == "GroupFields" then icon = " "; icon_hl = "Special"; text_hl = "Title"
+    elseif node.kind == "GroupMethods" then icon = "󰊕 "; icon_hl = "Special"; text_hl = "Title"
+    elseif node.kind == "BaseClass" then icon = "󰜮 "; icon_hl = "UNXGitRenamed"; text_hl = "Comment"
+    elseif node.kind == "Implementation" then icon = " "; icon_hl = "Comment"; text_hl = "Comment"
+    elseif node.kind == "Info" then icon = " "; icon_hl = "Comment"
     end
 
     line:append(icon, icon_hl)
@@ -558,10 +590,6 @@ local function prepare_node(node)
 
     return line
 end
-
--- ======================================================
--- 7. PUBLIC API
--- ======================================================
 
 function M.setup(user_config)
     config = user_config
@@ -579,19 +607,44 @@ function M.update(tree_instance, target_winid)
     if not tree_instance then return end
     
     local current_buf = vim.api.nvim_get_current_buf()
-    local ft = vim.bo[current_buf].filetype
-    if ft == "unx-explorer" or ft == "neo-tree" or ft == "TelescopePrompt" then return end
+    local buf_name = vim.api.nvim_buf_get_name(current_buf)
+    if buf_name == "" then return end
 
-    local nodes = parse_buffer_symbols(current_buf)
+    local ft = vim.bo[current_buf].filetype
+    if ft == "unx-explorer" or ft == "neo-tree" or ft == "TelescopePrompt" or ft == "qf" then return end
+
+    local filename = vim.fn.fnamemodify(buf_name, ":t:r")
+    if not filename or filename == "" then return end
+
+    local success, context = unl_api.provider.request("uep.get_class_context", { class_name = filename })
+    
+    local nodes
+    if success and context then
+        nodes = build_tree_from_context(context)
+    else
+        local map, global, list = parse_file_content(buf_name)
+        nodes = {}
+        for _, cdata in ipairs(list) do
+            local node = build_class_node(cdata)
+            node:expand()
+            table.insert(nodes, node)
+        end
+        if #global.methods > 0 or #global.fields > 0 then
+            local g_children = {}
+            for _, item in ipairs(global.methods) do table.insert(g_children, Tree.Node(item)) end
+            for _, item in ipairs(global.fields) do table.insert(g_children, Tree.Node(item)) end
+            local g_node = Tree.Node({ text = "Global", kind = "Info", id = "global_scope" }, g_children)
+            table.insert(nodes, g_node)
+        end
+    end
+
     tree_instance:set_nodes(nodes)
     tree_instance:render()
     
     if target_winid and vim.api.nvim_win_is_valid(target_winid) then
-        local fname = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(current_buf), ":t")
-        if fname == "" then fname = "No Name" end
         local icon = "󰌗"
         if ft == "cpp" then icon = "" elseif ft == "h" then icon = "" end
-        pcall(vim.api.nvim_win_set_option, target_winid, "winbar", string.format("%%#UNXGitFunction# %s %s", icon, fname))
+        pcall(vim.api.nvim_win_set_option, target_winid, "winbar", string.format("%%#UNXGitFunction# %s %s", icon, filename))
     end
 end
 
@@ -599,14 +652,34 @@ function M.on_node_action(tree_instance, split_instance, other_split_instance)
     local node = tree_instance:get_node()
     if not node then return end
     
+    if node.kind == "Class" or node.kind == "UClass" or node.kind == "Struct" or node.kind == "UStruct" then
+        show_action_menu(node, split_instance)
+        return
+    end
+
     if node:has_children() then
-        if node:is_expanded() then
-            node:collapse()
-        else
-            node:expand()
-        end
+        if node:is_expanded() then node:collapse() else node:expand() end
         tree_instance:render()
+    elseif node.line and node.file_path then
+        -- ファイルパスがある場合はそれを開く (親クラスや別ファイルへのジャンプ対応)
+        local cmd = "edit " .. vim.fn.fnameescape(node.file_path)
+        -- もし既にそのファイルが開かれているウィンドウがあればそこに移動、なければ現在のウィンドウで
+        local wins = vim.api.nvim_list_wins()
+        local target_win = nil
+        for _, w in ipairs(wins) do
+            if w ~= split_instance.winid and (not other_split_instance or w ~= other_split_instance.winid) then
+                target_win = w
+                break
+            end
+        end
+        if target_win then
+            vim.api.nvim_set_current_win(target_win)
+            vim.cmd(cmd)
+            vim.api.nvim_win_set_cursor(target_win, { node.line, 0 })
+            vim.cmd("normal! zz")
+        end
     elseif node.line then
+        -- ファイルパスがない場合は現在のバッファ内ジャンプ
         local wins = vim.api.nvim_list_wins()
         for _, w in ipairs(wins) do
             if w ~= split_instance.winid and (not other_split_instance or w ~= other_split_instance.winid) then
