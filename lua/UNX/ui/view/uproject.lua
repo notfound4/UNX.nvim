@@ -6,6 +6,11 @@ local unl_finder = require("UNL.finder")
 local unx_git = require("UNX.git")
 local fs = require("vim.fs")
 local utils = require("UNX.common.utils")
+local file_actions = require("UNX.ui.view.action.files")
+
+-- UNL Events
+local unl_events_ok, unl_events = pcall(require, "UNL.event.events")
+local unl_types_ok, unl_event_types = pcall(require, "UNL.event.types")
 
 -- DevIcons
 local has_devicons, devicons = pcall(require, "nvim-web-devicons")
@@ -94,7 +99,8 @@ local function convert_uep_to_nui(uep_node)
         extra = uep_node.extra, 
     }, children)
     
-    if uep_node.id == "logical_root" then
+    -- ルート、または子要素を持って生成されたノード（＝UEP側で展開済み）は展開状態にする
+    if uep_node.id == "logical_root" or (children and #children > 0) then
         nui_node:expand()
     end
     return nui_node
@@ -209,7 +215,7 @@ local COMPONENTS = {
 local function prepare_node(node)
     local line = Line()
     
-    -- 1. 左側（インデント・フォルダアイコン・拡張子アイコン）の構築
+    -- 1. 左側の構築
     line:append(string.rep("  ", node:get_depth() - 1))
 
     local has_children = node:has_children() or node._has_children
@@ -222,7 +228,7 @@ local function prepare_node(node)
         line:append("  ", "UNXIndentMarker")
     end
 
-    -- 2. アイコン決定
+    -- 2. アイコン
     local icon_text = config.uproject.icon.default_file or " "
     local icon_hl = "UNXFileIcon"
 
@@ -252,7 +258,7 @@ local function prepare_node(node)
 
     line:append(icon_text .. " ", icon_hl)
 
-    -- ★ 3. 右寄せコンポーネントの事前計算
+    -- 3. 右寄せコンポーネントの事前計算
     local right_components_data = {}
     local right_width = 0
     local component_keys = config.uproject.ui and config.uproject.ui.right_components or {}
@@ -272,7 +278,7 @@ local function prepare_node(node)
         end
     end
 
-    -- ★ 4. 名前 (計算と切り詰め)
+    -- 4. 名前 (計算と切り詰め)
     local path = node.path or node.id
     local norm_path = utils.normalize_path(path)
     local git_stat = unx_git.get_status(norm_path)
@@ -283,21 +289,14 @@ local function prepare_node(node)
 
     local display_text = node.text
 
-    -- 幅計算と切り詰め処理
     if tree_winid and vim.api.nvim_win_is_valid(tree_winid) then
         local win_width = vim.api.nvim_win_get_width(tree_winid)
-        -- 左側の幅（インデント+アイコン）を取得
         local current_left_width = line:width()
-        
-        -- 使用可能な幅 = ウィンドウ幅 - 左側 - 右側 - 余裕(2)
         local available_width = win_width - current_left_width - right_width - 2
         
-        -- 最低限の表示幅を確保
         if available_width < 1 then available_width = 1 end
         
-        -- ファイル名が長い場合は切り詰める
         if vim.fn.strdisplaywidth(display_text) > available_width then
-            -- UTF-8対応の切り詰め (簡易版: 幅が収まるまで後ろから削る)
             while vim.fn.strdisplaywidth(display_text) > available_width and #display_text > 0 do
                 display_text = vim.fn.strcharpart(display_text, 0, vim.fn.strchars(display_text) - 1)
             end
@@ -306,18 +305,17 @@ local function prepare_node(node)
 
     line:append(display_text, name_hl)
     
-    -- ★ 5. パディングと右側コンポーネントの描画
+    -- 5. パディングと右側コンポーネントの描画
     if right_width > 0 and tree_winid and vim.api.nvim_win_is_valid(tree_winid) then
         local win_width = vim.api.nvim_win_get_width(tree_winid)
         local current_width = line:width()
         
-        -- パディング = 全幅 - 現在幅 - 右幅 - 余裕(2)
         local padding = win_width - current_width - right_width - 2
         
         if padding > 0 then
             line:append(string.rep(" ", padding))
         else
-             line:append(" ") -- 最低限のスペース
+             line:append(" ")
         end
         
         for _, comp in ipairs(right_components_data) do
@@ -352,6 +350,22 @@ function M.setup(user_config)
             end
         end
     })
+
+    -- ★ UNLイベントによるツリー更新 (修正版)
+    if unl_events_ok and unl_types_ok then
+        local function on_cache_updated()
+            if active_tree and last_context.project_root then
+                 -- UEPのキャッシュ更新完了後にツリー再構築を行う
+                 vim.schedule(function()
+                    M.refresh(active_tree)
+                end)
+            end
+        end
+
+        -- 以前のファイル操作イベント購読は削除し、UEPの更新完了イベントを購読する
+        unl_events.subscribe(unl_event_types.ON_AFTER_UEP_LIGHTWEIGHT_REFRESH, on_cache_updated)
+        unl_events.subscribe(unl_event_types.ON_AFTER_REFRESH_COMPLETED, on_cache_updated)
+    end
 end
 
 function M.create(bufnr, winid)
@@ -361,6 +375,23 @@ function M.create(bufnr, winid)
         nodes = fetch_root_data(),
         prepare_node = prepare_node,
     })
+
+    local map_opts = { buffer = bufnr, noremap = true, silent = true }
+    local keys = config.keymaps or {}
+    
+    if keys.action_add then
+        vim.keymap.set("n", keys.action_add, function() file_actions.add(active_tree) end, map_opts)
+    end
+    if keys.action_delete then
+        vim.keymap.set("n", keys.action_delete, function() file_actions.delete(active_tree) end, map_opts)
+    end
+    if keys.action_move then
+        vim.keymap.set("n", keys.action_move, function() file_actions.move(active_tree) end, map_opts)
+    end
+    if keys.action_rename then
+        vim.keymap.set("n", keys.action_rename, function() file_actions.rename(active_tree) end, map_opts)
+    end
+
     return active_tree
 end
 

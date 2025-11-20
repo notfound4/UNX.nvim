@@ -39,7 +39,7 @@ M.defaults = {
             folder_closed   = "",
             folder_open     = "",
             default_file    = "",
-            modified        = "[+] ", -- デフォルトのテキスト（コンポーネントで使用）
+            modified        = "[+] ", 
         },
         git_icons = {
             Modified  = "",
@@ -50,9 +50,7 @@ M.defaults = {
             Untracked = "★",
             Ignored   = "◌",
         },
-        -- ★追加: UIコンポーネント設定
         ui = {
-            -- 右側に表示するコンポーネントの順序 (左 -> 右)
             right_components = {
                 "git_status",
                 "modified_buffer",
@@ -64,6 +62,12 @@ M.defaults = {
         open = { "<CR>", "o" },
         vsplit = "s",
         split = "i",
+        
+        -- ★追加: ファイル操作アクション
+        action_add = "a",
+        action_delete = "d",
+        action_move = "m",
+        action_rename = "r",
     },
 }
 
