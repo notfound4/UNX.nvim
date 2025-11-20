@@ -4,19 +4,30 @@ local Line = require("nui.line")
 local unl_api = require("UNL.api")
 local Query = require("UNX.ui.view.query")
 local IDRegistry = require("UNX.common.id_registry")
+local logger = require("UNX.logger")
 
 local M = {}
 local config = {}
 
--- 更新判定用のキャッシュ
+local function log_debug(msg)
+    logger.get().debug(msg)
+end
+
+local function log_error(msg)
+    logger.get().error(msg)
+end
+
 local last_state = {
     class_name = nil,
     ticks = {},
-    tree_ref = nil
+    tree_ref = nil,
+    cancel_func = nil,
 }
 
+local debounce_timer = nil
+
 -- ======================================================
--- 2. DATA STRUCTURE HELPERS
+-- 2. DATA STRUCTURE HELPERS (変更なし)
 -- ======================================================
 
 local function new_class_data(text, kind, line, id, file_path)
@@ -35,14 +46,12 @@ end
 
 local function merge_class_data(dest, src)
     if not src then return end
-    -- ソース側の実装(.cpp)をヘッダー側(.h)の構造にマージ
     for _, access in ipairs({"public", "protected", "private", "impl"}) do
         for _, item in ipairs(src.methods[access]) do
             local item_copy = vim.tbl_extend("keep", {}, item)
             item_copy.kind = "Implementation"
             table.insert(dest.methods["impl"], item_copy)
         end
-        -- フィールドは通常cppにはないが念のため
         for _, item in ipairs(src.fields[access]) do
             local item_copy = vim.tbl_extend("keep", {}, item)
             table.insert(dest.fields["impl"], item_copy)
@@ -50,13 +59,12 @@ local function merge_class_data(dest, src)
     end
 end
 
--- Nui描画用の「最終防壁」: すでにツリー内で使われたIDなら強制的に別名にする
 local function safe_node_id(id, seen_ids)
+    if not id then return "unknown_id_" .. vim.loop.hrtime() end
     if not seen_ids[id] then
         seen_ids[id] = true
         return id
     else
-        -- 重複した場合、ユニークになるまでサフィックスを付与
         local count = 1
         local new_id = id .. "_render_dup" .. count
         while seen_ids[new_id] do
@@ -68,26 +76,20 @@ local function safe_node_id(id, seen_ids)
     end
 end
 
--- グループノードやアイテムノードを作成するビルダ
 local function build_class_node(class_data, registry, render_seen_ids)
     local children = {}
     
-    -- グループID生成用ヘルパー
     local function make_group_id(suffix)
         local raw_id = registry:get(class_data.id .. suffix)
         return safe_node_id(raw_id, render_seen_ids)
     end
     
-    -- アイテムノード生成用ヘルパー
     local function make_item_node(item)
-        -- ここでIDの最終チェックを行う（重要）
         local unique_id = safe_node_id(item.id, render_seen_ids)
-        -- データ元のIDを書き換えないよう、コピーしてNuiに渡す
         local node_opts = vim.tbl_extend("force", item, { id = unique_id })
         return Tree.Node(node_opts)
     end
 
-    -- Members
     local field_group_children = {}
     for _, access in ipairs({"public", "protected", "private", "impl"}) do
         local items = class_data.fields[access]
@@ -119,7 +121,6 @@ local function build_class_node(class_data, registry, render_seen_ids)
         table.insert(children, group_node)
     end
 
-    -- Functions
     local func_group_children = {}
     for _, access in ipairs({"public", "protected", "private", "impl"}) do
         local items = class_data.methods[access]
@@ -166,7 +167,6 @@ local function build_class_node(class_data, registry, render_seen_ids)
         table.insert(children, group_node)
     end
 
-    -- クラスノード自体のIDも安全化
     local class_node_id = safe_node_id(class_data.id, render_seen_ids)
     local node = Tree.Node({
         text = class_data.text, kind = class_data.kind, line = class_data.line, id = class_node_id,
@@ -178,9 +178,8 @@ local function build_class_node(class_data, registry, render_seen_ids)
 end
 
 -- ======================================================
--- 3. PARSING HELPERS (Tree-sitter)
+-- 3. PARSING HELPERS (変更なし)
 -- ======================================================
-
 local function get_node_text(node, bufnr)
     if not node then return "" end
     return vim.treesitter.get_node_text(node, bufnr)
@@ -262,9 +261,8 @@ local function is_type_reference(node)
 end
 
 -- ======================================================
--- 4. CORE PARSING LOGIC
+-- 4. CORE PARSING LOGIC (変更なし)
 -- ======================================================
-
 local function parse_file_content(file_path, registry)
     if not file_path or file_path == "" or vim.fn.filereadable(file_path) == 0 then 
         return {}, new_global_data(), {}
@@ -277,7 +275,10 @@ local function parse_file_content(file_path, registry)
     end
 
     local ok, parser = pcall(vim.treesitter.get_parser, bufnr, "cpp")
-    if not ok or not parser then return {}, new_global_data(), {} end
+    if not ok or not parser then 
+        log_debug("Failed to get parser for " .. file_path)
+        return {}, new_global_data(), {} 
+    end
 
     local tree_root = parser:parse()[1]:root()
     local query_ok, query = pcall(vim.treesitter.query.parse, "cpp", Query.cpp)
@@ -414,85 +415,126 @@ local function parse_file_content(file_path, registry)
                 table.insert(global_data.fields, field_item)
             end
         end
-        ::continue:: -- ★★★ ここを追加しました ★★★
+        ::continue::
     end
     
     return classes_map, global_data, classes_list
 end
 
 -- ======================================================
--- 5. BUILDERS
+-- 5. BUILDERS (Async / Coroutine)
 -- ======================================================
 
-local function build_tree_from_context(context)
+local function build_tree_from_context_async(context, registry, render_seen_ids)
     local root_nodes = {}
-    local registry = IDRegistry.new()
-    -- ★追加: Nui描画時の重複IDチェック用テーブル
-    local render_seen_ids = {}
     
     if context.parents then
         for i = #context.parents, 1, -1 do
+            coroutine.yield()
             local parent_info = context.parents[i]
-            local p_map, _, _ = parse_file_content(parent_info.header, registry)
-            local p_data = p_map[parent_info.name]
-
-            local p_node
-            if p_data then
-                p_node = build_class_node(p_data, registry, render_seen_ids)
-                p_node.kind = "BaseClass"
-            else
-                -- IDの衝突を避けるため safe_node_id を通す
-                local raw_id = registry:get("base_" .. parent_info.name .. "_" .. i)
-                local safe_id = safe_node_id(raw_id, render_seen_ids)
-                
-                p_node = Tree.Node({
-                    text = parent_info.name,
-                    kind = "BaseClass",
-                    id = safe_id,
-                    file_path = parent_info.header
-                })
+            if parent_info.header then
+                local p_map, _, _ = parse_file_content(parent_info.header, registry)
+                local p_data = p_map[parent_info.name]
+                local p_node
+                if p_data then
+                    p_node = build_class_node(p_data, registry, render_seen_ids)
+                    p_node.kind = "BaseClass"
+                else
+                    local raw_id = registry:get("base_" .. parent_info.name .. "_" .. i)
+                    local safe_id = safe_node_id(raw_id, render_seen_ids)
+                    p_node = Tree.Node({ text = parent_info.name, kind = "BaseClass", id = safe_id, file_path = parent_info.header })
+                end
+                p_node:collapse()
+                table.insert(root_nodes, p_node)
             end
-            
-            p_node:collapse()
-            table.insert(root_nodes, p_node)
         end
     end
 
     local current_info = context.current
-    if not current_info then return root_nodes end
+    if not current_info or not current_info.header then 
+        log_debug("build_tree: current_info or header is nil")
+        return root_nodes 
+    end
 
+    coroutine.yield()
     local h_map, _, h_list = parse_file_content(current_info.header, registry)
-    local cpp_map, _, cpp_list = parse_file_content(current_info.cpp, registry)
-
-    local main_class_name = current_info.name
-    local main_class_data = h_map[main_class_name]
-
-    if main_class_data then
-        if cpp_map[main_class_name] then
-            merge_class_data(main_class_data, cpp_map[main_class_name])
-        end
+    
+    if current_info.cpp then
+        coroutine.yield()
+        local cpp_map, _, cpp_list = parse_file_content(current_info.cpp, registry)
         
-        local main_node = build_class_node(main_class_data, registry, render_seen_ids)
-        main_node:expand()
-        table.insert(root_nodes, main_node)
-    else
-        for _, class_data in ipairs(h_list) do
-            if cpp_map[class_data.text] then
-                merge_class_data(class_data, cpp_map[class_data.text])
+        local main_class_name = current_info.name
+        local main_class_data = h_map[main_class_name]
+
+        if main_class_data then
+            if cpp_map[main_class_name] then
+                merge_class_data(main_class_data, cpp_map[main_class_name])
             end
-            local node = build_class_node(class_data, registry, render_seen_ids)
-            node:expand()
-            table.insert(root_nodes, node)
+            local main_node = build_class_node(main_class_data, registry, render_seen_ids)
+            main_node:expand()
+            table.insert(root_nodes, main_node)
+        else
+            for _, class_data in ipairs(h_list) do
+                if cpp_map[class_data.text] then
+                    merge_class_data(class_data, cpp_map[class_data.text])
+                end
+                local node = build_class_node(class_data, registry, render_seen_ids)
+                node:expand()
+                table.insert(root_nodes, node)
+            end
         end
+    else
+         local main_class_name = current_info.name
+         local main_class_data = h_map[main_class_name]
+         if main_class_data then
+            local main_node = build_class_node(main_class_data, registry, render_seen_ids)
+            main_node:expand()
+            table.insert(root_nodes, main_node)
+         else
+            for _, class_data in ipairs(h_list) do
+                local node = build_class_node(class_data, registry, render_seen_ids)
+                node:expand()
+                table.insert(root_nodes, node)
+            end
+         end
     end
 
     return root_nodes
 end
 
+local function build_tree_fallback(file_path, registry, render_seen_ids)
+    local map, global, list = parse_file_content(file_path, registry)
+    local nodes = {}
+    
+    for _, cdata in ipairs(list) do
+        local node = build_class_node(cdata, registry, render_seen_ids)
+        node:expand()
+        table.insert(nodes, node)
+    end
+    
+    if #global.methods > 0 or #global.fields > 0 then
+        local g_children = {}
+        for _, item in ipairs(global.methods) do 
+            local safe_id = safe_node_id(item.id, render_seen_ids)
+            table.insert(g_children, Tree.Node(vim.tbl_extend("force", item, {id=safe_id}))) 
+        end
+        for _, item in ipairs(global.fields) do 
+            local safe_id = safe_node_id(item.id, render_seen_ids)
+            table.insert(g_children, Tree.Node(vim.tbl_extend("force", item, {id=safe_id}))) 
+        end
+        local raw_gid = registry:get("global_scope")
+        local safe_gid = safe_node_id(raw_gid, render_seen_ids)
+        local g_node = Tree.Node({ text = "Global", kind = "Info", id = safe_gid }, g_children)
+        table.insert(nodes, g_node)
+    end
+    
+    return nodes
+end
+
 -- ======================================================
--- 6. RENDERER & API
+-- 6. RENDERER & API (Async Runner)
 -- ======================================================
--- (変更なし)
+-- (prepare_node, setup, create は変更なし)
 
 local function prepare_node(node)
     local line = Line()
@@ -540,6 +582,7 @@ function M.create(bufnr)
     })
 end
 
+-- ★★★ 修正: バッファチェックを緩和し、必ず描画を試みる ★★★
 function M.update(tree_instance, target_winid, opts)
     if not tree_instance then return end
     opts = opts or {}
@@ -551,83 +594,121 @@ function M.update(tree_instance, target_winid, opts)
     local ft = vim.bo[current_buf].filetype
     if ft == "unx-explorer" or ft == "neo-tree" or ft == "TelescopePrompt" or ft == "qf" then return end
 
-    local filename = vim.fn.fnamemodify(buf_name, ":t:r")
-    if not filename or filename == "" then return end
-
-    local current_tick = vim.api.nvim_buf_get_changedtick(current_buf)
-    if not opts.force and last_state.class_name == filename 
-       and last_state.ticks[current_buf] == current_tick 
-       and last_state.tree_ref == tree_instance then
-        return
+    -- デバウンス
+    if debounce_timer then
+        debounce_timer:stop()
+        if not debounce_timer:is_closing() then debounce_timer:close() end
+        debounce_timer = nil
     end
 
-    local success, context = unl_api.provider.request("uep.get_class_context", { class_name = filename })
-    
-    local nodes
-    if success and context then
-        nodes = build_tree_from_context(context)
-        
-        last_state.class_name = filename
-        last_state.tree_ref = tree_instance
-        last_state.files = {}
-        if context.current then
-            if context.current.header then
-                local b = vim.fn.bufnr(context.current.header)
-                if b > 0 then last_state.ticks[b] = vim.api.nvim_buf_get_changedtick(b) end
-            end
-            if context.current.cpp then
-                local b = vim.fn.bufnr(context.current.cpp)
-                if b > 0 then last_state.ticks[b] = vim.api.nvim_buf_get_changedtick(b) end
-            end
-        end
-    else
-        -- フォールバック
-        local registry = IDRegistry.new()
-        -- ★追加: フォールバック時の重複チェック用
-        local render_seen_ids = {}
-        local map, global, list = parse_file_content(buf_name, registry)
-        nodes = {}
-        for _, cdata in ipairs(list) do
-            local node = build_class_node(cdata, registry, render_seen_ids)
-            node:expand()
-            table.insert(nodes, node)
+    debounce_timer = vim.loop.new_timer()
+    debounce_timer:start(50, 0, vim.schedule_wrap(function()
+        if debounce_timer then
+            if not debounce_timer:is_closing() then debounce_timer:close() end
+            debounce_timer = nil
         end
         
-        if #global.methods > 0 or #global.fields > 0 then
-            local g_children = {}
-            for _, item in ipairs(global.methods) do 
-                local safe_id = safe_node_id(item.id, render_seen_ids)
-                table.insert(g_children, Tree.Node(vim.tbl_extend("force", item, {id=safe_id}))) 
-            end
-            for _, item in ipairs(global.fields) do 
-                local safe_id = safe_node_id(item.id, render_seen_ids)
-                table.insert(g_children, Tree.Node(vim.tbl_extend("force", item, {id=safe_id}))) 
-            end
-            
-            local raw_gid = registry:get("global_scope")
-            local safe_gid = safe_node_id(raw_gid, render_seen_ids)
-            
-            local g_node = Tree.Node({ 
-                text = "Global", 
-                kind = "Info", 
-                id = safe_gid 
-            }, g_children)
-            table.insert(nodes, g_node)
-        end
-        
-        last_state.class_name = filename
-        last_state.tree_ref = tree_instance
-        last_state.ticks[current_buf] = current_tick
-    end
+        -- 再取得
+        local current_buf_delayed = vim.api.nvim_get_current_buf()
+        local buf_name_delayed = vim.api.nvim_buf_get_name(current_buf_delayed)
+        if buf_name_delayed == "" then return end
+        local filename = vim.fn.fnamemodify(buf_name_delayed, ":t:r")
+        if not filename or filename == "" then return end
+        local current_tick = vim.api.nvim_buf_get_changedtick(current_buf_delayed)
 
-    tree_instance:set_nodes(nodes)
-    tree_instance:render()
-    
-    if target_winid and vim.api.nvim_win_is_valid(target_winid) then
-        local icon = "󰌗"
-        if ft == "cpp" then icon = "" elseif ft == "h" then icon = "" end
-        pcall(vim.api.nvim_win_set_option, target_winid, "winbar", string.format("%%#UNXGitFunction# %s %s", icon, filename))
-    end
+        if not opts.force and last_state.class_name == filename 
+           and last_state.ticks[current_buf_delayed] == current_tick 
+           and last_state.tree_ref == tree_instance then
+            return
+        end
+
+        if last_state.cancel_func then
+            last_state.cancel_func()
+            last_state.cancel_func = nil
+        end
+
+        local is_cancelled = false
+        last_state.cancel_func = function() is_cancelled = true end
+
+        log_debug("Requesting class context for: " .. filename)
+
+        unl_api.provider.request("uep.get_class_context", { 
+            class_name = filename,
+            on_complete = function(success, context)
+                if is_cancelled then 
+                    log_debug("Request cancelled.")
+                    return 
+                end
+                
+                -- ★ バッファチェックを削除: どこにいようと更新は続行する
+
+                local co = coroutine.create(function()
+                    local nodes = {}
+                    local registry = IDRegistry.new()
+                    local render_seen_ids = {}
+
+                    if success and context then
+                        log_debug("UEP returned context. Building async tree...")
+                        nodes = build_tree_from_context_async(context, registry, render_seen_ids)
+                    end
+
+                    if not nodes or #nodes == 0 then
+                        log_debug("Nodes empty. Running fallback parse for: " .. buf_name_delayed)
+                        nodes = build_tree_fallback(buf_name_delayed, registry, render_seen_ids)
+                    else
+                        log_debug("Async tree build success. Nodes count: " .. #nodes)
+                    end
+                    
+                    last_state.class_name = filename
+                    last_state.tree_ref = tree_instance
+                    last_state.ticks[current_buf_delayed] = current_tick
+
+                    if not is_cancelled then
+                         vim.schedule(function()
+                            if is_cancelled then return end
+                            
+                            -- ★ tree_instance 自体がLuaオブジェクトとして生存していればOKとする
+                            if not tree_instance then 
+                                log_debug("Tree instance gone, skip render")
+                                return 
+                            end
+                            
+                            log_debug("Rendering tree with " .. #nodes .. " nodes for " .. filename)
+                            tree_instance:set_nodes(nodes)
+                            tree_instance:render()
+                            
+                            if target_winid and vim.api.nvim_win_is_valid(target_winid) then
+                                local icon = "󰌗"
+                                if ft == "cpp" then icon = "" elseif ft == "h" then icon = "" end
+                                pcall(vim.api.nvim_win_set_option, target_winid, "winbar", string.format("%%#UNXGitFunction# %s %s", icon, filename))
+                            end
+                            
+                            if last_state.class_name == filename then
+                                 last_state.cancel_func = nil
+                            end
+                         end)
+                    end
+                end)
+
+                local function pump()
+                    if is_cancelled then return end
+                    
+                    if coroutine.status(co) == "suspended" then
+                        local ok, err = coroutine.resume(co)
+                        if not ok then
+                            log_error("Coroutine failed: " .. tostring(err))
+                            return
+                        end
+                        if coroutine.status(co) ~= "dead" then
+                            vim.schedule(pump)
+                        end
+                    end
+                end
+
+                pump()
+            end
+        })
+    end))
 end
 
 function M.on_node_action(tree_instance, split_instance, other_split_instance)
