@@ -69,12 +69,12 @@ function M.open()
         vim.api.nvim_win_set_option(state.class_func_split.winid, "winbar", "%#UNXGitFunction# 󰌗 Class/Function")
     end
 
-    state.uproject_tree = ViewUproject.create(state.uproject_split.bufnr)
+    -- ★修正: winid を渡す
+    state.uproject_tree = ViewUproject.create(state.uproject_split.bufnr, state.uproject_split.winid)
     state.class_func_tree = ViewSymbols.create(state.class_func_split.bufnr)
     
     state.uproject_tree:render()
     
-    -- 初回表示時は強制更新
     if vim.bo.filetype == "c" or vim.bo.filetype == "cpp" then
         ViewSymbols.update(state.class_func_tree, state.class_func_split.winid, { force = true })
     end
@@ -87,7 +87,6 @@ function M.open()
     map_quit(state.uproject_split)
     map_quit(state.class_func_split)
 
-    -- Enterキーのマッピング
     for _, key in ipairs(config.keymaps.open or {"<CR>"}) do
         state.uproject_split:map("n", key, function()
             ViewUproject.on_node_action(state.uproject_tree, state.uproject_split, state.class_func_split)
@@ -98,7 +97,6 @@ function M.open()
         end)
     end
 
-    -- ★ マウス操作のマッピング (ダブルクリックで実行)
     local function map_mouse(split, tree, view_mod)
         split:map("n", "<2-LeftMouse>", function()
             local mouse = vim.fn.getmousepos()

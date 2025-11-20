@@ -5,6 +5,7 @@ local unl_api = require("UNL.api")
 local unl_finder = require("UNL.finder")
 local unx_git = require("UNX.git")
 local fs = require("vim.fs")
+local utils = require("UNX.common.utils") -- ★追加
 
 -- DevIcons
 local has_devicons, devicons = pcall(require, "nvim-web-devicons")
@@ -12,43 +13,36 @@ local has_devicons, devicons = pcall(require, "nvim-web-devicons")
 local M = {}
 local config = {}
 
--- コンテキスト (UEPモード用)
+-- コンテキスト
 local last_context = {
-    mode = "normal", -- "uep" or "normal"
+    mode = "normal",
     project_root = nil,
     engine_root = nil,
 }
 
 local active_tree = nil
+local tree_winid = nil
+local render_timer = nil
 
 -- ======================================================
 -- HELPER FUNCTIONS
 -- ======================================================
 
-local function get_opened_buffers_status()
-    local opened_buffers = {}
-    for _, buffer in ipairs(vim.api.nvim_list_bufs()) do
-        if vim.fn.buflisted(buffer) ~= 0 then
-            local name = vim.api.nvim_buf_get_name(buffer)
-            if name == "" then name = "[No Name]#" .. buffer end
-            -- パス正規化
-            name = name:gsub("\\", "/")
-            opened_buffers[name] = { modified = vim.bo[buffer].modified }
-        end
+-- 安全な再描画（デバウンス付き）
+local function schedule_render()
+    if not active_tree then return end
+    if render_timer then
+        render_timer:stop()
+        if not render_timer:is_closing() then render_timer:close() end
     end
-    return opened_buffers
-end
-
-local function get_git_icon_and_hl(status_code)
-    local icons = config.uproject and config.uproject.git_icons or {}
-    if status_code == "M" then return icons.Modified or "", "UNXGitModified" end
-    if status_code == "A" then return icons.Added or "✚", "UNXGitAdded" end
-    if status_code == "D" then return icons.Deleted or "✖", "UNXGitDeleted" end
-    if status_code == "R" then return icons.Renamed or "➜", "UNXGitRenamed" end
-    if status_code == "C" then return icons.Conflict or "", "UNXGitConflict" end
-    if status_code == "??" then return icons.Untracked or "★", "UNXGitUntracked" end
-    if status_code == "!!" then return icons.Ignored or "◌", "UNXGitIgnored" end
-    return "", "UNXFileName"
+    render_timer = vim.loop.new_timer()
+    render_timer:start(200, 0, vim.schedule_wrap(function()
+        if render_timer then
+            if not render_timer:is_closing() then render_timer:close() end
+            render_timer = nil
+        end
+        if active_tree then active_tree:render() end
+    end))
 end
 
 local function scan_directory(path)
@@ -58,14 +52,12 @@ local function scan_directory(path)
         while true do
             local name, type = vim.loop.fs_scandir_next(handle)
             if not name then break end
-            
             local full_path = fs.joinpath(path, name)
-            -- 隠しファイルスキップ (.gitなど)
             if not name:match("^%.") then 
                 local is_dir = (type == "directory")
                 table.insert(items, {
                     text = name,
-                    id = full_path,
+                    id = utils.normalize_path(full_path),
                     path = full_path,
                     type = is_dir and "directory" or "file",
                     _has_children = is_dir
@@ -75,7 +67,7 @@ local function scan_directory(path)
     end
     table.sort(items, function(a, b)
         if a.type == b.type then return a.text < b.text end
-        return a.type == "directory" -- ディレクトリ先頭
+        return a.type == "directory"
     end)
     return items
 end
@@ -95,7 +87,7 @@ local function convert_uep_to_nui(uep_node)
 
     local nui_node = Tree.Node({
         text = uep_node.name,
-        id = uep_node.id,
+        id = uep_node.id or (uep_node.path and utils.normalize_path(uep_node.path)),
         path = uep_node.path,
         type = uep_node.type,
         _has_children = uep_node.has_children or (children and #children > 0),
@@ -110,12 +102,9 @@ end
 
 local function fetch_root_data()
     local cwd = vim.loop.cwd()
-    
-    -- 1. UEプロジェクトか判定
     local project_info = unl_finder.project.find_project(cwd)
     
     if project_info then
-        -- === UEP モード ===
         last_context.mode = "uep"
         last_context.project_root = project_info.root
         
@@ -124,9 +113,8 @@ local function fetch_root_data()
         })
         last_context.engine_root = engine_root
 
-        -- Git更新トリガー
         unx_git.refresh(project_info.root, function() 
-            if active_tree then active_tree:render() end 
+            schedule_render()
         end)
 
         local success, result = unl_api.provider.request("uep.build_tree_model", {
@@ -146,13 +134,11 @@ local function fetch_root_data()
         end
     end
 
-    -- === フォールバック: 通常ファイルモード ===
     last_context.mode = "normal"
     last_context.project_root = cwd
     
-    -- Git更新トリガー
     unx_git.refresh(cwd, function() 
-        if active_tree then active_tree:render() end 
+        schedule_render()
     end)
 
     local root_children = scan_directory(cwd)
@@ -161,10 +147,9 @@ local function fetch_root_data()
         table.insert(nui_children, Tree.Node(item))
     end
     
-    -- ルートノードを作成
     local root_node = Tree.Node({
         text = vim.fn.fnamemodify(cwd, ":t") .. " (File System)",
-        id = cwd,
+        id = utils.normalize_path(cwd),
         path = cwd,
         type = "directory",
     }, nui_children)
@@ -177,7 +162,6 @@ local function lazy_load_children(tree_instance, parent_node)
     if parent_node:has_children() then return end
     
     if last_context.mode == "uep" then
-        -- UEP Lazy Load
         local success, children = unl_api.provider.request("uep.load_tree_children", {
             capability = "uep.load_tree_children",
             project_root = last_context.project_root,
@@ -200,7 +184,6 @@ local function lazy_load_children(tree_instance, parent_node)
             tree_instance:set_nodes(nui_children, parent_node:get_id())
         end
     else
-        -- Normal Lazy Load
         local children = scan_directory(parent_node.path)
         local nui_children = {}
         for _, item in ipairs(children) do
@@ -211,15 +194,26 @@ local function lazy_load_children(tree_instance, parent_node)
 end
 
 -- ======================================================
+-- COMPONENT LOADERS
+-- ======================================================
+
+-- ★変更: コンポーネントを外部ファイルから読み込み
+local COMPONENTS = {
+    git_status = require("UNX.ui.view.component.git"),
+    modified_buffer = require("UNX.ui.view.component.modified"),
+}
+
+-- ======================================================
 -- RENDERER
 -- ======================================================
 
 local function prepare_node(node)
     local line = Line()
+    
+    -- 1. 左側の構築
     line:append(string.rep("  ", node:get_depth() - 1))
 
     local has_children = node:has_children() or node._has_children
-
     if has_children then
         local exp_open = config.uproject.icon.expander_open or ""
         local exp_closed = config.uproject.icon.expander_closed or ""
@@ -229,47 +223,83 @@ local function prepare_node(node)
         line:append("  ", "UNXIndentMarker")
     end
 
+    -- 2. アイコン
     local icon_text = config.uproject.icon.default_file or " "
     local icon_hl = "UNXFileIcon"
 
-    if node.type == "directory" then
+    local uep_type = node.extra and node.extra.uep_type
+    local is_folder_like = (node.type == "directory") or 
+                           (uep_type == "category") or 
+                           (uep_type == "module_root")
+
+    if is_folder_like then
         local f_open = config.uproject.icon.folder_open or ""
         local f_close = config.uproject.icon.folder_closed or ""
         icon_text = node:is_expanded() and f_open or f_close
         icon_hl = "UNXDirectoryIcon"
+        
+        if node.text == "Game" then icon_hl = "UNXGitRenamed" end 
+        if node.text == "Engine" then icon_hl = "UNXGitRenamed" end
+        
     elseif node.type == "file" and has_devicons then
         local filename = node.text
         local ext = node.path and node.path:match("^.+%.(.+)$") or ""
         local dev_icon, dev_hl = devicons.get_icon(filename, ext, { default = true })
-        if dev_icon then
-            icon_text = dev_icon
-            icon_hl = dev_hl
-        end
+        if dev_icon then icon_text = dev_icon; icon_hl = dev_hl end
+        if ext == "uproject" then icon_text = "UE"; icon_hl = "UNXGitAdded" end
+        if ext == "uplugin" then icon_text = "UP"; icon_hl = "UNXGitAdded" end
+        if ext == "Build.cs" then icon_text = "🔨"; icon_hl = "Special" end
     end
 
     line:append(icon_text .. " ", icon_hl)
 
+    -- 3. 名前 (共通ユーティリティを使用)
     local path = node.path or node.id
-    -- パス正規化 (Gitキャッシュキーと一致させるため)
-    if path then path = path:gsub("\\", "/") end
-
-    local opened = get_opened_buffers_status()
-    local is_modified_buf = opened[path] and opened[path].modified
-    
-    -- Gitステータス取得
-    local git_stat = unx_git.get_status(path)
-
+    local norm_path = utils.normalize_path(path)
+    local git_stat = unx_git.get_status(norm_path)
     local name_hl = "UNXFileName"
-    if git_stat then _, name_hl = get_git_icon_and_hl(git_stat) end
-    
-    line:append(node.text, name_hl)
+    if git_stat then 
+        _, name_hl = utils.get_git_icon_and_hl(git_stat, config)
+    end
 
-    if git_stat then
-        local g_icon, g_hl = get_git_icon_and_hl(git_stat)
-        line:append(" " .. g_icon, g_hl)
-    elseif is_modified_buf then
-        local m_icon = config.uproject.icon.modified or "[+]"
-        line:append(m_icon, "UNXModifiedIcon")
+    line:append(node.text, name_hl)
+    
+    -- 4. 右寄せコンポーネント
+    local right_components_data = {}
+    local right_width = 0
+    local component_keys = config.uproject.ui and config.uproject.ui.right_components or {}
+    
+    for _, comp_key in ipairs(component_keys) do
+        local comp_fn = COMPONENTS[comp_key]
+        if comp_fn then
+            -- ★変更: config も渡す
+            local res = comp_fn(node, {}, config)
+            if res then
+                if right_width > 0 then
+                    table.insert(right_components_data, { text = " ", highlight = "Normal" })
+                    right_width = right_width + 1
+                end
+                table.insert(right_components_data, res)
+                right_width = right_width + vim.fn.strdisplaywidth(res.text)
+            end
+        end
+    end
+
+    if right_width > 0 and tree_winid and vim.api.nvim_win_is_valid(tree_winid) then
+        local win_width = vim.api.nvim_win_get_width(tree_winid)
+        local available_width = math.max(1, win_width - 2)
+        local left_width = line:width()
+        
+        local padding = available_width - left_width - right_width
+        if padding > 0 then
+            line:append(string.rep(" ", padding))
+        else
+             line:append(" ")
+        end
+        
+        for _, comp in ipairs(right_components_data) do
+            line:append(comp.text, comp.highlight)
+        end
     end
 
     return line
@@ -282,19 +312,27 @@ end
 function M.setup(user_config)
     config = user_config
     
-    -- イベント連動: ファイル保存時やシェル操作後にGitステータスを更新
-    vim.api.nvim_create_autocmd({ "BufWritePost", "FileChangedShellPost", "FocusGained" }, {
+    vim.api.nvim_create_autocmd({ "BufWritePost", "FileChangedShellPost", "FocusGained", "DirChanged" }, {
         callback = function()
             if active_tree and last_context.project_root then
                 unx_git.refresh(last_context.project_root, function()
-                    if active_tree then active_tree:render() end
+                    schedule_render()
                 end)
+            end
+        end
+    })
+
+    vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "BufModifiedSet", "WinResized", "VimResized" }, {
+        callback = function()
+            if active_tree then
+                schedule_render()
             end
         end
     })
 end
 
-function M.create(bufnr)
+function M.create(bufnr, winid)
+    tree_winid = winid
     active_tree = Tree({
         bufnr = bufnr,
         nodes = fetch_root_data(),
