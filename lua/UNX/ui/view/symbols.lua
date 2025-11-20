@@ -1,4 +1,4 @@
--- lua/UNX/ui/view/symbols.lua
+-- lua/UNX/ui/view/symbols.lu-- lua/UNX/ui/view/symbols.lua
 local Tree = require("nui.tree")
 local Line = require("nui.line")
 
@@ -18,6 +18,9 @@ end
 -- ======================================================
 
 local CPP_QUERY = [[
+  ; --- Access Specifiers ---
+  (access_specifier) @access_label
+
   ; --- Classes & Structs ---
   (unreal_class_declaration name: (_) @class_name) @definition.uclass
   (unreal_struct_declaration name: (_) @struct_name) @definition.ustruct
@@ -45,6 +48,13 @@ local CPP_QUERY = [[
       (pointer_declarator declarator: (function_declarator declarator: (_) @func_name))
       (reference_declarator (function_declarator declarator: (_) @func_name))
     ]
+  ) @definition.method
+
+  ; 4. コンストラクタ/デストラクタ (型なし宣言)
+  (declaration
+    (function_declarator
+      declarator: (_) @func_name
+    )
   ) @definition.method
 
   ; --- Properties ---
@@ -83,33 +93,46 @@ local function get_base_class_name(definition_node, bufnr)
     return nil
 end
 
--- ★修正: child_by_field_name を使わずに安全に型参照判定を行う
+local function get_node_text(node, bufnr)
+    if not node then return "" end
+    return vim.treesitter.get_node_text(node, bufnr)
+end
+
+local function get_parameters_text(node, bufnr)
+    local p = node:parent()
+    local func_declarator = nil
+    for _ = 1, 5 do
+        if not p then break end
+        if p:type() == "function_declarator" then
+            func_declarator = p
+            break
+        end
+        p = p:parent()
+    end
+
+    if func_declarator then
+        for child in func_declarator:iter_children() do
+            if child:type() == "parameter_list" then
+                local text = get_node_text(child, bufnr)
+                return text:gsub("%s+", " ")
+            end
+        end
+    end
+    return "()"
+end
+
 local function is_type_reference(node)
     local parent = node:parent()
     while parent do
         local type = parent:type()
-        
-        -- 引数宣言の中にある場合は参照とみなす
+        if type == "compound_statement" or type == "field_declaration_list" then return false end
         if type == "parameter_declaration" then return true end
-        
-        -- フィールド宣言 (メンバ変数定義) の場合
-        if type == "field_declaration" then
-            -- 'type' フィールドかどうかを判定したいが、メソッドがない場合があるため
-            -- 「最初の名前付き子要素 (named_child(0)) が自分自身であれば、それは型定義である」とみなす
-            -- (C++のfield_declarationは通常、最初の子が型、次が宣言子)
-            local first_child = parent:named_child(0)
-            if first_child and node:id() == first_child:id() then
-                return true
-            end
-        end
-        
-        if type:match("definition") or type:match("declaration") then break end
+        if type == "function_definition" or type == "field_declaration" then return true end
         parent = parent:parent()
     end
     return false
 end
 
--- 中間データ構造から Nui Node を再帰的に作成する関数
 local function build_nui_nodes(data_list)
     local nodes = {}
     for _, data in ipairs(data_list) do
@@ -117,14 +140,13 @@ local function build_nui_nodes(data_list)
         if data.children and #data.children > 0 then
             children = build_nui_nodes(data.children)
         end
-        
         local node = Tree.Node({
             text = data.text,
+            detail = data.detail,
             kind = data.kind,
             line = data.line,
             id = data.id
         }, children)
-        
         if children then node:expand() end
         table.insert(nodes, node)
     end
@@ -151,28 +173,40 @@ local function parse_buffer_symbols(bufnr)
     local last_class_range = { -1, -1, -1, -1 }
     local symbol_count = 0
 
+    -- ★追加: ID重複防止用の管理テーブル
+    local seen_ids = {}
+    -- ★追加: ユニークなIDを生成するヘルパー
+    local function get_unique_id(base_id)
+        if not seen_ids[base_id] then
+            seen_ids[base_id] = 1
+            return base_id
+        else
+            local count = seen_ids[base_id]
+            seen_ids[base_id] = count + 1
+            return string.format("%s_dup%d", base_id, count)
+        end
+    end
+
     for id, node, metadata in query:iter_captures(tree_root, bufnr, 0, -1) do
         local capture_name = query.captures[id]
         
-        -- 型参照（定義ではないもの）はスキップ
-        if is_type_reference(node) then
+        if (capture_name == "class_name" or capture_name == "struct_name" or capture_name == "enum_name") and is_type_reference(node) then
             goto continue
         end
 
-        local text = vim.treesitter.get_node_text(node, bufnr)
+        local text = get_node_text(node, bufnr)
         local s_row, s_col, e_row, _ = node:range()
         local line_num = s_row + 1
         
         local definition_node = node
         while definition_node do
             local type = definition_node:type()
-            if type:match("declaration") or type:match("specifier") or type:match("definition") then
-                break
-            end
+            if type:match("declaration") or type:match("specifier") or type:match("definition") then break end
             definition_node = definition_node:parent()
         end
         if not definition_node then definition_node = node end
 
+        -- === Class / Struct / Enum ===
         if capture_name == "class_name" or capture_name == "struct_name" or capture_name == "enum_name" then
             symbol_count = symbol_count + 1
             local kind = "Class"
@@ -186,9 +220,12 @@ local function parse_buffer_symbols(bufnr)
 
             local base_class_text = get_base_class_name(definition_node, bufnr)
 
+            local raw_id = string.format("%s_%d_%d", text, line_num, s_col)
+            local unique_id = get_unique_id(raw_id)
+
             local class_data = {
                 text = text, kind = kind, line = line_num,
-                id = string.format("%s_%d_%d", text, line_num, s_col),
+                id = unique_id,
                 children = {}
             }
 
@@ -196,20 +233,43 @@ local function parse_buffer_symbols(bufnr)
             last_class_range = { definition_node:range() }
 
             if base_class_text then
+                local parent_raw_id = string.format("base_%s_for_%s", base_class_text, unique_id)
+                local parent_unique_id = get_unique_id(parent_raw_id)
+                
                 local parent_data = {
                     text = base_class_text, kind = "BaseClass",
-                    id = string.format("base_%s_for_%s", base_class_text, class_data.id),
+                    id = parent_unique_id,
                     children = { class_data }
                 }
                 table.insert(roots_data, parent_data)
             else
                 table.insert(roots_data, class_data)
             end
+            
+        -- === Access Specifier ===
+        elseif capture_name == "access_label" then
+            local raw_id = string.format("access_%d_%d", line_num, s_col)
+            local access_data = {
+                text = text, kind = "Access", line = line_num,
+                id = get_unique_id(raw_id),
+            }
+            if last_class_data and s_row >= last_class_range[1] and s_row <= last_class_range[3] then
+                table.insert(last_class_data.children, access_data)
+            else
+                table.insert(roots_data, access_data)
+            end
 
+        -- === Function / UFUNCTION ===
         elseif capture_name == "func_name" then
             symbol_count = symbol_count + 1
             local kind = "Function"
             if has_child_type(definition_node, "ufunction_macro") then kind = "UFunction" end
+
+            if last_class_data and (text == last_class_data.text or text == "~" .. last_class_data.text) then
+                kind = "Constructor"
+            end
+
+            local params = get_parameters_text(node, bufnr)
 
             local inside_class = false
             if last_class_data then
@@ -218,15 +278,20 @@ local function parse_buffer_symbols(bufnr)
                 end
             end
 
+            local raw_id = string.format("%s_%d_%d", text, line_num, s_col)
             local func_data = {
-                text = text, kind = kind, line = line_num,
-                id = string.format("%s_%d_%d", text, line_num, s_col)
+                text = text, detail = params, kind = kind, line = line_num,
+                id = get_unique_id(raw_id)
             }
 
             if inside_class then
                 table.insert(last_class_data.children, func_data)
+            else
+                -- クラス外の関数 (必要ならルートへ)
+                table.insert(roots_data, func_data)
             end
 
+        -- === Field / UPROPERTY ===
         elseif capture_name == "field_name" then
             symbol_count = symbol_count + 1
             local kind = "Field"
@@ -239,9 +304,10 @@ local function parse_buffer_symbols(bufnr)
                 end
             end
             
+            local raw_id = string.format("%s_%d_%d", text, line_num, s_col)
             local field_data = {
                 text = text, kind = kind, line = line_num,
-                id = string.format("%s_%d_%d", text, line_num, s_col)
+                id = get_unique_id(raw_id)
             }
 
             if inside_class then
@@ -302,12 +368,19 @@ local function prepare_node(node)
     elseif node.kind == "Function" then
         icon = "󰊕 "
         icon_hl = "Function"
+    elseif node.kind == "Constructor" then
+        icon = " "
+        icon_hl = "Special"
     elseif node.kind == "UProperty" then
         icon = "UP "
         icon_hl = "UNXDirectoryIcon"
     elseif node.kind == "Field" then
         icon = " "
         icon_hl = "Identifier"
+    elseif node.kind == "Access" then
+        icon = " "
+        icon_hl = "Special"
+        text_hl = "Special"
     elseif node.kind == "Info" then
         icon = " "
         icon_hl = "Comment"
@@ -316,8 +389,8 @@ local function prepare_node(node)
     line:append(icon, icon_hl)
     line:append(node.text, text_hl)
     
-    if node.line then
-        line:append(string.format(" :%d", node.line), "Comment")
+    if node.detail and node.detail ~= "" then
+        line:append(node.detail, "Comment")
     end
 
     return line
@@ -344,7 +417,6 @@ function M.update(tree_instance, target_winid)
     
     local current_buf = vim.api.nvim_get_current_buf()
     local ft = vim.bo[current_buf].filetype
-    
     if ft == "unx-explorer" or ft == "neo-tree" or ft == "TelescopePrompt" then return end
 
     local nodes = parse_buffer_symbols(current_buf)
