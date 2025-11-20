@@ -8,30 +8,33 @@ M.defaults = {
             width = 35,
         },
     },
-    -- ★追加: ログ設定 (UNLの仕様に合わせる)
-  cache = { dirname = "UNX" },
-  logging = {
-    level = "info",
-    echo = { level = "warn" },
-    notify = { level = "error", prefix = "[UNX]" },
-    file = { level = "debug", enable = true, max_kb = 512, rotate = 3, filename = "unx.log" },
-    perf = { enabled = false, patterns = { "^refresh" }, level = "trace" },
-  },
-    -- ハイライト設定
+    -- ログ設定
+    cache = { dirname = "UNX" },
+    logging = {
+        level = "info",
+        echo = { level = "warn" },
+        notify = { level = "error", prefix = "[UNX]" },
+        file = { level = "debug", enable = true, max_kb = 512, rotate = 3, filename = "unx.log" },
+        perf = { enabled = false, patterns = { "^refresh" }, level = "trace" },
+    },
+    -- ハイライト設定 (標準グループへのリンク)
+    -- ユーザーは setup() でこれらを上書き可能
     highlights = {
-        UNXDirectoryIcon = { fg = "#73CEF4" },
-        UNXFileIcon      = { fg = "#888888" },
-        UNXFileName      = { fg = "NONE" },
-        UNXIndentMarker  = { fg = "#626262" },
-        UNXModifiedIcon  = { fg = "#D7D787" },
+        -- 基本UI
+        UNXDirectoryIcon = { link = "Directory" }, -- ディレクトリ色 (通常は青系)
+        UNXFileIcon      = { link = "Comment" },   -- ファイルアイコン (控えめな色)
+        UNXFileName      = { link = "Normal" },    -- ファイル名 (通常色)
+        UNXIndentMarker  = { link = "NonText" },   -- インデントガイド (目立たない色)
+        UNXModifiedIcon  = { link = "Special" },   -- 変更ありアイコン (目立つ色)
         
-        UNXGitModified   = { fg = "#D7D787" },
-        UNXGitAdded      = { fg = "#5FAF5F" },
-        UNXGitDeleted    = { fg = "#FF5900" },
-        UNXGitRenamed    = { fg = "#D7D787" },
-        UNXGitConflict   = { fg = "#FF8700", bold = true },
-        UNXGitUntracked  = { fg = "#5FAF5F", italic = true },
-        UNXGitIgnored    = { fg = "#626262" },
+        -- Git Status
+        UNXGitModified   = { link = "Special" },    -- 変更 (黄色/紫など)
+        UNXGitAdded      = { link = "String" },     -- 追加 (緑系が多い)
+        UNXGitDeleted    = { link = "Error" },      -- 削除 (赤系)
+        UNXGitRenamed    = { link = "Title" },      -- 移動/名前変更 (目立つ色)
+        UNXGitConflict   = { link = "ErrorMsg" },   -- 競合 (警告色)
+        UNXGitUntracked  = { link = "Function" },   -- 未追跡 (青/水色系が多い)
+        UNXGitIgnored    = { link = "Comment" },    -- 無視 (グレー)
     },
     uproject = {
         show_hidden = false,
