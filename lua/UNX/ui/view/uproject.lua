@@ -3,6 +3,9 @@ local Tree = require("nui.tree")
 local Line = require("nui.line")
 local unl_api = require("UNL.api")
 local unl_finder = require("UNL.finder")
+-- ★追加: Gitモジュール
+local unx_git = require("UNX.git")
+local fs = require("vim.fs")
 
 -- DevIcons
 local has_devicons, devicons = pcall(require, "nvim-web-devicons")
@@ -10,11 +13,14 @@ local has_devicons, devicons = pcall(require, "nvim-web-devicons")
 local M = {}
 local config = {}
 
--- リクエスト用コンテキスト保持
+-- コンテキスト (UEPモード用)
 local last_context = {
+    mode = "normal", -- "uep" or "normal"
     project_root = nil,
     engine_root = nil,
 }
+
+local active_tree = nil
 
 -- ======================================================
 -- HELPER FUNCTIONS
@@ -32,10 +38,6 @@ local function get_opened_buffers_status()
     return opened_buffers
 end
 
-local function get_git_status_lookup()
-    return {} 
-end
-
 local function get_git_icon_and_hl(status_code)
     local icons = config.uproject and config.uproject.git_icons or {}
     if status_code == "M" then return icons.Modified or "M", "UNXGitModified" end
@@ -46,6 +48,37 @@ local function get_git_icon_and_hl(status_code)
     if status_code == "??" then return icons.Untracked or "?", "UNXGitUntracked" end
     if status_code == "!!" then return icons.Ignored or "!", "UNXGitIgnored" end
     return "", "UNXFileName"
+end
+
+-- 通常のファイルシステムスキャン (フォールバック用)
+local function scan_directory(path)
+    local items = {}
+    local handle = vim.loop.fs_scandir(path)
+    if handle then
+        while true do
+            local name, type = vim.loop.fs_scandir_next(handle)
+            if not name then break end
+            
+            local full_path = fs.joinpath(path, name)
+            -- 隠しファイルスキップ (簡易)
+            if not name:match("^%.") then 
+                local is_dir = (type == "directory")
+                table.insert(items, {
+                    text = name,
+                    id = full_path,
+                    path = full_path,
+                    type = is_dir and "directory" or "file",
+                    _has_children = is_dir -- ディレクトリなら展開可能とする
+                })
+            end
+        end
+    end
+    -- ディレクトリ優先ソート
+    table.sort(items, function(a, b)
+        if a.type == b.type then return a.text < b.text end
+        return a.type == "directory"
+    end)
+    return items
 end
 
 -- ======================================================
@@ -66,74 +99,120 @@ local function convert_uep_to_nui(uep_node)
         id = uep_node.id,
         path = uep_node.path,
         type = uep_node.type,
-        -- has_children判定: 実際に子供がいるか、またはフラグが立っているか
         _has_children = uep_node.has_children or (children and #children > 0),
         extra = uep_node.extra, 
     }, children)
     
-    -- 論理ルートは最初から展開
     if uep_node.id == "logical_root" then
         nui_node:expand()
     end
-
     return nui_node
 end
 
 local function fetch_root_data()
     local cwd = vim.loop.cwd()
     
+    -- 1. UEプロジェクトか判定
     local project_info = unl_finder.project.find_project(cwd)
-    if not project_info then
-        vim.notify("UNX: Not an Unreal Engine project directory.", vim.log.levels.WARN)
-        return {}
-    end
     
-    local engine_root = unl_finder.engine.find_engine_root(project_info.uproject, {
-        engine_override_path = config.engine_path 
-    })
+    if project_info then
+        -- === UEP モード ===
+        last_context.mode = "uep"
+        last_context.project_root = project_info.root
+        
+        local engine_root = unl_finder.engine.find_engine_root(project_info.uproject, {
+            engine_override_path = config.engine_path 
+        })
+        last_context.engine_root = engine_root
 
-    last_context.project_root = project_info.root
-    last_context.engine_root = engine_root
+        -- Git更新
+        unx_git.refresh(project_info.root, function() if active_tree then active_tree:render() end end)
 
-    local success, result = unl_api.provider.request("uep.build_tree_model", {
-        capability = "uep.build_tree_model",
-        project_root = project_info.root,
-        engine_root = engine_root,
-        scope = "Full", -- FullにすることでEngineも正しく含める
-        logger_name = "UNX",
-    })
+        local success, result = unl_api.provider.request("uep.build_tree_model", {
+            capability = "uep.build_tree_model",
+            project_root = project_info.root,
+            engine_root = engine_root,
+            scope = "Full",
+            logger_name = "UNX",
+        })
 
-    if not success or not result then return {} end
-    if result[1] and result[1].type == "message" then return {} end
-
-    local nui_nodes = {}
-    for _, item in ipairs(result) do
-        table.insert(nui_nodes, convert_uep_to_nui(item))
+        if success and result and (not result[1] or result[1].type ~= "message") then
+            local nui_nodes = {}
+            for _, item in ipairs(result) do
+                table.insert(nui_nodes, convert_uep_to_nui(item))
+            end
+            return nui_nodes
+        end
     end
-    return nui_nodes
+
+    -- === フォールバック: 通常ファイルモード ===
+    last_context.mode = "normal"
+    last_context.project_root = cwd
+    
+    -- Git更新 (通常のGitリポジトリなら反応する)
+    unx_git.refresh(cwd, function() if active_tree then active_tree:render() end end)
+
+    -- CWD直下をスキャンして表示
+    local root_node = Tree.Node({
+        text = vim.fn.fnamemodify(cwd, ":t"),
+        id = cwd,
+        path = cwd,
+        type = "directory",
+        _has_children = true
+    }, {}) -- 初期は空、展開時にロード
+    root_node:expand() -- 最初から展開状態にする
+    
+    -- ルート直下のファイルを取得してセット
+    local children = scan_directory(cwd)
+    -- Nuiの仕様上、Node作成時にchildrenを渡すか、後で set_nodes する
+    -- ここではルートノード1つを返し、その子供を即座にロードした状態にする
+    local nui_children = {}
+    for _, item in ipairs(children) do
+        table.insert(nui_children, Tree.Node(item))
+    end
+    root_node = Tree.Node({
+        text = vim.fn.fnamemodify(cwd, ":t") .. " (File System)",
+        id = cwd,
+        path = cwd,
+        type = "directory",
+    }, nui_children)
+    root_node:expand()
+
+    return { root_node }
 end
 
 local function lazy_load_children(tree_instance, parent_node)
     if parent_node:has_children() then return end
     
-    local success, children = unl_api.provider.request("uep.load_tree_children", {
-        capability = "uep.load_tree_children",
-        project_root = last_context.project_root,
-        engine_root = last_context.engine_root,
-        node = { 
-            id = parent_node.id, 
-            path = parent_node.path,
-            name = parent_node.text,
-            type = parent_node.type,
-            extra = parent_node.extra 
-        },
-        logger_name = "UNX",
-    })
+    if last_context.mode == "uep" then
+        -- UEPモード: プロバイダーに問い合わせ
+        local success, children = unl_api.provider.request("uep.load_tree_children", {
+            capability = "uep.load_tree_children",
+            project_root = last_context.project_root,
+            engine_root = last_context.engine_root,
+            node = { 
+                id = parent_node.id, 
+                path = parent_node.path,
+                name = parent_node.text,
+                type = parent_node.type,
+                extra = parent_node.extra 
+            },
+            logger_name = "UNX",
+        })
 
-    if success and children then
+        if success and children then
+            local nui_children = {}
+            for _, item in ipairs(children) do
+                table.insert(nui_children, convert_uep_to_nui(item))
+            end
+            tree_instance:set_nodes(nui_children, parent_node:get_id())
+        end
+    else
+        -- 通常モード: fs_scandir でスキャン
+        local children = scan_directory(parent_node.path)
         local nui_children = {}
         for _, item in ipairs(children) do
-            table.insert(nui_children, convert_uep_to_nui(item))
+            table.insert(nui_children, Tree.Node(item))
         end
         tree_instance:set_nodes(nui_children, parent_node:get_id())
     end
@@ -180,10 +259,10 @@ local function prepare_node(node)
 
     local path = node.path or node.id
     local opened = get_opened_buffers_status()
-    local git = get_git_status_lookup()
-    
     local is_modified = opened[path] and opened[path].modified
-    local git_stat = git[path]
+    
+    -- Gitステータス取得 (キャッシュから)
+    local git_stat = unx_git.get_status(path)
 
     local name_hl = "UNXFileName"
     if git_stat then _, name_hl = get_git_icon_and_hl(git_stat) end
@@ -207,14 +286,26 @@ end
 
 function M.setup(user_config)
     config = user_config
+    
+    -- ファイル保存時にGitステータス更新
+    vim.api.nvim_create_autocmd({ "BufWritePost", "FileChangedShellPost", "FocusGained" }, {
+        callback = function()
+            if active_tree and last_context.project_root then
+                unx_git.refresh(last_context.project_root, function()
+                    active_tree:render()
+                end)
+            end
+        end
+    })
 end
 
 function M.create(bufnr)
-    return Tree({
+    active_tree = Tree({
         bufnr = bufnr,
         nodes = fetch_root_data(),
         prepare_node = prepare_node,
     })
+    return active_tree
 end
 
 function M.refresh(tree_instance)
@@ -222,6 +313,7 @@ function M.refresh(tree_instance)
         local new_nodes = fetch_root_data()
         tree_instance:set_nodes(new_nodes)
         tree_instance:render()
+        active_tree = tree_instance
     end
 end
 
