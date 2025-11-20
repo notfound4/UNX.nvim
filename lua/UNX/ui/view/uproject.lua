@@ -5,7 +5,7 @@ local unl_api = require("UNL.api")
 local unl_finder = require("UNL.finder")
 local unx_git = require("UNX.git")
 local fs = require("vim.fs")
-local utils = require("UNX.common.utils") -- ★追加
+local utils = require("UNX.common.utils")
 
 -- DevIcons
 local has_devicons, devicons = pcall(require, "nvim-web-devicons")
@@ -197,7 +197,6 @@ end
 -- COMPONENT LOADERS
 -- ======================================================
 
--- ★変更: コンポーネントを外部ファイルから読み込み
 local COMPONENTS = {
     git_status = require("UNX.ui.view.component.git"),
     modified_buffer = require("UNX.ui.view.component.modified"),
@@ -210,7 +209,7 @@ local COMPONENTS = {
 local function prepare_node(node)
     local line = Line()
     
-    -- 1. 左側の構築
+    -- 1. 左側（インデント・フォルダアイコン・拡張子アイコン）の構築
     line:append(string.rep("  ", node:get_depth() - 1))
 
     local has_children = node:has_children() or node._has_children
@@ -223,7 +222,7 @@ local function prepare_node(node)
         line:append("  ", "UNXIndentMarker")
     end
 
-    -- 2. アイコン
+    -- 2. アイコン決定
     local icon_text = config.uproject.icon.default_file or " "
     local icon_hl = "UNXFileIcon"
 
@@ -253,18 +252,7 @@ local function prepare_node(node)
 
     line:append(icon_text .. " ", icon_hl)
 
-    -- 3. 名前 (共通ユーティリティを使用)
-    local path = node.path or node.id
-    local norm_path = utils.normalize_path(path)
-    local git_stat = unx_git.get_status(norm_path)
-    local name_hl = "UNXFileName"
-    if git_stat then 
-        _, name_hl = utils.get_git_icon_and_hl(git_stat, config)
-    end
-
-    line:append(node.text, name_hl)
-    
-    -- 4. 右寄せコンポーネント
+    -- ★ 3. 右寄せコンポーネントの事前計算
     local right_components_data = {}
     local right_width = 0
     local component_keys = config.uproject.ui and config.uproject.ui.right_components or {}
@@ -272,7 +260,6 @@ local function prepare_node(node)
     for _, comp_key in ipairs(component_keys) do
         local comp_fn = COMPONENTS[comp_key]
         if comp_fn then
-            -- ★変更: config も渡す
             local res = comp_fn(node, {}, config)
             if res then
                 if right_width > 0 then
@@ -285,16 +272,52 @@ local function prepare_node(node)
         end
     end
 
+    -- ★ 4. 名前 (計算と切り詰め)
+    local path = node.path or node.id
+    local norm_path = utils.normalize_path(path)
+    local git_stat = unx_git.get_status(norm_path)
+    local name_hl = "UNXFileName"
+    if git_stat then 
+        _, name_hl = utils.get_git_icon_and_hl(git_stat, config)
+    end
+
+    local display_text = node.text
+
+    -- 幅計算と切り詰め処理
+    if tree_winid and vim.api.nvim_win_is_valid(tree_winid) then
+        local win_width = vim.api.nvim_win_get_width(tree_winid)
+        -- 左側の幅（インデント+アイコン）を取得
+        local current_left_width = line:width()
+        
+        -- 使用可能な幅 = ウィンドウ幅 - 左側 - 右側 - 余裕(2)
+        local available_width = win_width - current_left_width - right_width - 2
+        
+        -- 最低限の表示幅を確保
+        if available_width < 1 then available_width = 1 end
+        
+        -- ファイル名が長い場合は切り詰める
+        if vim.fn.strdisplaywidth(display_text) > available_width then
+            -- UTF-8対応の切り詰め (簡易版: 幅が収まるまで後ろから削る)
+            while vim.fn.strdisplaywidth(display_text) > available_width and #display_text > 0 do
+                display_text = vim.fn.strcharpart(display_text, 0, vim.fn.strchars(display_text) - 1)
+            end
+        end
+    end
+
+    line:append(display_text, name_hl)
+    
+    -- ★ 5. パディングと右側コンポーネントの描画
     if right_width > 0 and tree_winid and vim.api.nvim_win_is_valid(tree_winid) then
         local win_width = vim.api.nvim_win_get_width(tree_winid)
-        local available_width = math.max(1, win_width - 2)
-        local left_width = line:width()
+        local current_width = line:width()
         
-        local padding = available_width - left_width - right_width
+        -- パディング = 全幅 - 現在幅 - 右幅 - 余裕(2)
+        local padding = win_width - current_width - right_width - 2
+        
         if padding > 0 then
             line:append(string.rep(" ", padding))
         else
-             line:append(" ")
+             line:append(" ") -- 最低限のスペース
         end
         
         for _, comp in ipairs(right_components_data) do
