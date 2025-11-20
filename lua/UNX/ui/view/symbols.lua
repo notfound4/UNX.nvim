@@ -3,27 +3,26 @@ local Tree = require("nui.tree")
 local Line = require("nui.line")
 local unl_api = require("UNL.api")
 local Query = require("UNX.ui.view.query")
+local IDRegistry = require("UNX.common.id_registry")
 
 local M = {}
 local config = {}
 
--- ======================================================
--- 1. DEBUG LOGGING
--- ======================================================
-local function debug_log(fmt, ...)
-    -- local msg = string.format("[UNX-SYM] " .. fmt, ...)
-    -- vim.api.nvim_command("echomsg '" .. msg:gsub("'", "''") .. "'")
-end
+-- 更新判定用のキャッシュ
+local last_state = {
+    class_name = nil,
+    ticks = {},
+    tree_ref = nil
+}
 
 -- ======================================================
 -- 2. DATA STRUCTURE HELPERS
 -- ======================================================
 
-local function new_class_data(text, kind, line, id, s_col)
+local function new_class_data(text, kind, line, id, file_path)
     local default_access = (kind == "Struct" or kind == "UStruct") and "public" or "private"
     return {
-        text = text, kind = kind, line = line, id = id, s_col = s_col,
-        base_class = nil,
+        text = text, kind = kind, line = line, id = id, file_path = file_path,
         current_access = default_access,
         methods = { public = {}, protected = {}, private = {}, impl = {} },
         fields  = { public = {}, protected = {}, private = {}, impl = {} },
@@ -36,80 +35,141 @@ end
 
 local function merge_class_data(dest, src)
     if not src then return end
+    -- ソース側の実装(.cpp)をヘッダー側(.h)の構造にマージ
     for _, access in ipairs({"public", "protected", "private", "impl"}) do
         for _, item in ipairs(src.methods[access]) do
-            item.kind = "Implementation"
-            table.insert(dest.methods["impl"], item)
+            local item_copy = vim.tbl_extend("keep", {}, item)
+            item_copy.kind = "Implementation"
+            table.insert(dest.methods["impl"], item_copy)
         end
+        -- フィールドは通常cppにはないが念のため
         for _, item in ipairs(src.fields[access]) do
-            table.insert(dest.fields["impl"], item)
+            local item_copy = vim.tbl_extend("keep", {}, item)
+            table.insert(dest.fields["impl"], item_copy)
         end
     end
 end
 
--- ★修正: build_class_node で impl をグループ化するロジックを復活
-local function build_class_node(class_data)
+-- Nui描画用の「最終防壁」: すでにツリー内で使われたIDなら強制的に別名にする
+local function safe_node_id(id, seen_ids)
+    if not seen_ids[id] then
+        seen_ids[id] = true
+        return id
+    else
+        -- 重複した場合、ユニークになるまでサフィックスを付与
+        local count = 1
+        local new_id = id .. "_render_dup" .. count
+        while seen_ids[new_id] do
+            count = count + 1
+            new_id = id .. "_render_dup" .. count
+        end
+        seen_ids[new_id] = true
+        return new_id
+    end
+end
+
+-- グループノードやアイテムノードを作成するビルダ
+local function build_class_node(class_data, registry, render_seen_ids)
     local children = {}
     
-    -- 1. Members
+    -- グループID生成用ヘルパー
+    local function make_group_id(suffix)
+        local raw_id = registry:get(class_data.id .. suffix)
+        return safe_node_id(raw_id, render_seen_ids)
+    end
+    
+    -- アイテムノード生成用ヘルパー
+    local function make_item_node(item)
+        -- ここでIDの最終チェックを行う（重要）
+        local unique_id = safe_node_id(item.id, render_seen_ids)
+        -- データ元のIDを書き換えないよう、コピーしてNuiに渡す
+        local node_opts = vim.tbl_extend("force", item, { id = unique_id })
+        return Tree.Node(node_opts)
+    end
+
+    -- Members
     local field_group_children = {}
-    for _, access in ipairs({"public", "protected", "private"}) do
+    for _, access in ipairs({"public", "protected", "private", "impl"}) do
         local items = class_data.fields[access]
         if items and #items > 0 then
-            local access_node_children = {}
-            for _, item in ipairs(items) do table.insert(access_node_children, Tree.Node(item)) end
-            local access_node = Tree.Node({ text = access .. ":", kind = "Access", id = class_data.id .. "_fields_" .. access }, access_node_children)
-            access_node:expand()
-            table.insert(field_group_children, access_node)
+            if access == "impl" then
+                for _, item in ipairs(items) do table.insert(field_group_children, make_item_node(item)) end
+            else
+                local access_node_children = {}
+                for _, item in ipairs(items) do table.insert(access_node_children, make_item_node(item)) end
+                
+                local access_node = Tree.Node({ 
+                    text = access .. ":", 
+                    kind = "Access", 
+                    id = make_group_id("_f_" .. access) 
+                }, access_node_children)
+                
+                access_node:expand()
+                table.insert(field_group_children, access_node)
+            end
         end
     end
+    
     if #field_group_children > 0 then
-        local group_node = Tree.Node({ text = "Members", kind = "GroupFields", id = class_data.id .. "_group_fields" }, field_group_children)
+        local group_node = Tree.Node({ 
+            text = "Members", 
+            kind = "GroupFields", 
+            id = make_group_id("_group_fields") 
+        }, field_group_children)
         table.insert(children, group_node)
     end
 
-    -- 2. Functions
+    -- Functions
     local func_group_children = {}
-    for _, access in ipairs({"public", "protected", "private"}) do
+    for _, access in ipairs({"public", "protected", "private", "impl"}) do
         local items = class_data.methods[access]
         if items and #items > 0 then
-            local access_node_children = {}
-            for _, item in ipairs(items) do table.insert(access_node_children, Tree.Node(item)) end
-            local access_node = Tree.Node({ text = access .. ":", kind = "Access", id = class_data.id .. "_funcs_" .. access }, access_node_children)
-            access_node:expand()
-            table.insert(func_group_children, access_node)
+            if access == "impl" then
+                for _, item in ipairs(items) do table.insert(func_group_children, make_item_node(item)) end
+            else
+                local access_node_children = {}
+                for _, item in ipairs(items) do table.insert(access_node_children, make_item_node(item)) end
+                
+                local access_node = Tree.Node({ 
+                    text = access .. ":", 
+                    kind = "Access", 
+                    id = make_group_id("_m_" .. access) 
+                }, access_node_children)
+                
+                access_node:expand()
+                table.insert(func_group_children, access_node)
+            end
         end
     end
     
-    -- ★修正: Implementations (.cpp) をグループ化
     local impl_items = class_data.methods["impl"]
     if impl_items and #impl_items > 0 then
         local impl_children = {}
-        for _, item in ipairs(impl_items) do 
-            table.insert(impl_children, Tree.Node(item)) 
-        end
+        for _, item in ipairs(impl_items) do table.insert(impl_children, make_item_node(item)) end
         
-        -- Access kind を流用してアイコンを表示 (または専用の kind を作る)
         local impl_node = Tree.Node({ 
             text = "Implementations (.cpp)", 
             kind = "Access", 
-            id = class_data.id .. "_impls" 
+            id = make_group_id("_impls_group") 
         }, impl_children)
-        
-        -- デフォルトで開くかどうかはお好みで (ここでは閉じておく)
-        -- impl_node:expand()
         
         table.insert(func_group_children, impl_node)
     end
 
     if #func_group_children > 0 then
-        local group_node = Tree.Node({ text = "Functions", kind = "GroupMethods", id = class_data.id .. "_group_funcs" }, func_group_children)
+        local group_node = Tree.Node({ 
+            text = "Functions", 
+            kind = "GroupMethods", 
+            id = make_group_id("_group_funcs") 
+        }, func_group_children)
         group_node:expand()
         table.insert(children, group_node)
     end
 
+    -- クラスノード自体のIDも安全化
+    local class_node_id = safe_node_id(class_data.id, render_seen_ids)
     local node = Tree.Node({
-        text = class_data.text, kind = class_data.kind, line = class_data.line, id = class_data.id,
+        text = class_data.text, kind = class_data.kind, line = class_data.line, id = class_node_id,
         file_path = class_data.file_path
     }, children)
     
@@ -117,29 +177,8 @@ local function build_class_node(class_data)
     return node
 end
 
-local function build_nui_nodes(data_list)
-    local nodes = {}
-    for _, data in ipairs(data_list) do
-        local children = nil
-        if data.children and #data.children > 0 then
-            children = build_nui_nodes(data.children)
-        end
-        local node = Tree.Node({
-            text = data.text,
-            detail = data.detail,
-            kind = data.kind,
-            line = data.line,
-            id = data.id,
-            file_path = data.file_path
-        }, children)
-        if children then node:expand() end
-        table.insert(nodes, node)
-    end
-    return nodes
-end
-
 -- ======================================================
--- 3. PARSING HELPERS
+-- 3. PARSING HELPERS (Tree-sitter)
 -- ======================================================
 
 local function get_node_text(node, bufnr)
@@ -226,11 +265,11 @@ end
 -- 4. CORE PARSING LOGIC
 -- ======================================================
 
-local function parse_file_content(file_path)
+local function parse_file_content(file_path, registry)
     if not file_path or file_path == "" or vim.fn.filereadable(file_path) == 0 then 
         return {}, new_global_data(), {}
     end
-
+    
     local bufnr = vim.fn.bufadd(file_path)
     if not vim.api.nvim_buf_is_loaded(bufnr) then
         vim.fn.bufload(bufnr)
@@ -250,23 +289,25 @@ local function parse_file_content(file_path)
     
     local last_class_data = nil
     local last_class_range = { -1, -1, -1, -1 }
-    local seen_ids = {}
-    local function get_unique_id(base_id)
-        if not seen_ids[base_id] then seen_ids[base_id] = 1; return base_id
-        else local c = seen_ids[base_id]; seen_ids[base_id] = c + 1; return string.format("%s_dup%d", base_id, c) end
+    
+    local file_hash = IDRegistry.get_file_hash(file_path)
+    
+    local function generate_id(name, line, col)
+        local raw = string.format("%s_%s_%d_%d", file_hash, name, line, col)
+        return registry:get(raw)
     end
     
     local function get_or_create_class_data(name, line, s_col)
         if classes_map[name] then return classes_map[name] end
+        
         local kind = "Class"
         local first_char = name:sub(1,1)
         if first_char == "A" or first_char == "U" then kind = "UClass"
         elseif first_char == "F" then kind = "UStruct"
         elseif first_char == "E" then kind = "UEnum" end
 
-        local raw_id = string.format("%s_%d_%d", name, line, s_col)
-        local c_data = new_class_data(name, kind, line, get_unique_id(raw_id), s_col)
-        c_data.file_path = file_path
+        local id = generate_id(name, line, s_col)
+        local c_data = new_class_data(name, kind, line, id, file_path)
         
         table.insert(classes_list, c_data)
         classes_map[name] = c_data
@@ -306,7 +347,6 @@ local function parse_file_content(file_path)
             if type == "unreal_enum_declaration" then kind = "UEnum" end
 
             local base_class_text = get_base_class_name(definition_node, bufnr)
-            
             local class_data = get_or_create_class_data(text, line_num, s_col)
             class_data.kind = kind
             class_data.base_class = base_class_text
@@ -329,8 +369,10 @@ local function parse_file_content(file_path)
         elseif capture_name == "func_name" then
             local kind = "Function"
             if has_child_type(definition_node, "ufunction_macro") then kind = "UFunction" end
+            
             local target_class_data = last_class_data
             local access_bucket = target_class_data and target_class_data.current_access or "public"
+            
             if pending_impl_class then
                 target_class_data = get_or_create_class_data(pending_impl_class, line_num, s_col)
                 access_bucket = "impl"
@@ -341,11 +383,11 @@ local function parse_file_content(file_path)
             else
                 target_class_data = nil
             end
+            
             local params = get_parameters_text(node, bufnr)
-            local raw_id = string.format("%s_%d_%d", text, line_num, s_col)
             local func_item = {
                 text = text, detail = params, kind = kind, line = line_num,
-                id = get_unique_id(raw_id),
+                id = generate_id(text .. "_func", line_num, s_col),
                 file_path = file_path
             }
 
@@ -358,12 +400,13 @@ local function parse_file_content(file_path)
         elseif capture_name == "field_name" then
             local kind = "Field"
             if has_child_type(definition_node, "uproperty_macro") then kind = "UProperty" end
-            local raw_id = string.format("%s_%d_%d", text, line_num, s_col)
+            
             local field_item = {
                 text = text, kind = kind, line = line_num,
-                id = get_unique_id(raw_id),
+                id = generate_id(text .. "_field", line_num, s_col),
                 file_path = file_path
             }
+            
             if last_class_data and s_row >= last_class_range[1] and s_row <= last_class_range[3] then
                 local access = last_class_data.current_access
                 table.insert(last_class_data.fields[access], field_item)
@@ -371,8 +414,9 @@ local function parse_file_content(file_path)
                 table.insert(global_data.fields, field_item)
             end
         end
-        ::continue::
+        ::continue:: -- ★★★ ここを追加しました ★★★
     end
+    
     return classes_map, global_data, classes_list
 end
 
@@ -382,22 +426,29 @@ end
 
 local function build_tree_from_context(context)
     local root_nodes = {}
+    local registry = IDRegistry.new()
+    -- ★追加: Nui描画時の重複IDチェック用テーブル
+    local render_seen_ids = {}
     
     if context.parents then
         for i = #context.parents, 1, -1 do
             local parent_info = context.parents[i]
-            local p_map, _, _ = parse_file_content(parent_info.header)
+            local p_map, _, _ = parse_file_content(parent_info.header, registry)
             local p_data = p_map[parent_info.name]
 
             local p_node
             if p_data then
-                p_node = build_class_node(p_data)
+                p_node = build_class_node(p_data, registry, render_seen_ids)
                 p_node.kind = "BaseClass"
             else
+                -- IDの衝突を避けるため safe_node_id を通す
+                local raw_id = registry:get("base_" .. parent_info.name .. "_" .. i)
+                local safe_id = safe_node_id(raw_id, render_seen_ids)
+                
                 p_node = Tree.Node({
                     text = parent_info.name,
                     kind = "BaseClass",
-                    id = "base_" .. parent_info.name,
+                    id = safe_id,
                     file_path = parent_info.header
                 })
             end
@@ -410,8 +461,8 @@ local function build_tree_from_context(context)
     local current_info = context.current
     if not current_info then return root_nodes end
 
-    local h_map, _, h_list = parse_file_content(current_info.header)
-    local cpp_map, _, cpp_list = parse_file_content(current_info.cpp)
+    local h_map, _, h_list = parse_file_content(current_info.header, registry)
+    local cpp_map, _, cpp_list = parse_file_content(current_info.cpp, registry)
 
     local main_class_name = current_info.name
     local main_class_data = h_map[main_class_name]
@@ -420,7 +471,8 @@ local function build_tree_from_context(context)
         if cpp_map[main_class_name] then
             merge_class_data(main_class_data, cpp_map[main_class_name])
         end
-        local main_node = build_class_node(main_class_data)
+        
+        local main_node = build_class_node(main_class_data, registry, render_seen_ids)
         main_node:expand()
         table.insert(root_nodes, main_node)
     else
@@ -428,7 +480,7 @@ local function build_tree_from_context(context)
             if cpp_map[class_data.text] then
                 merge_class_data(class_data, cpp_map[class_data.text])
             end
-            local node = build_class_node(class_data)
+            local node = build_class_node(class_data, registry, render_seen_ids)
             node:expand()
             table.insert(root_nodes, node)
         end
@@ -440,6 +492,7 @@ end
 -- ======================================================
 -- 6. RENDERER & API
 -- ======================================================
+-- (変更なし)
 
 local function prepare_node(node)
     local line = Line()
@@ -487,8 +540,9 @@ function M.create(bufnr)
     })
 end
 
-function M.update(tree_instance, target_winid)
+function M.update(tree_instance, target_winid, opts)
     if not tree_instance then return end
+    opts = opts or {}
     
     local current_buf = vim.api.nvim_get_current_buf()
     local buf_name = vim.api.nvim_buf_get_name(current_buf)
@@ -500,26 +554,70 @@ function M.update(tree_instance, target_winid)
     local filename = vim.fn.fnamemodify(buf_name, ":t:r")
     if not filename or filename == "" then return end
 
+    local current_tick = vim.api.nvim_buf_get_changedtick(current_buf)
+    if not opts.force and last_state.class_name == filename 
+       and last_state.ticks[current_buf] == current_tick 
+       and last_state.tree_ref == tree_instance then
+        return
+    end
+
     local success, context = unl_api.provider.request("uep.get_class_context", { class_name = filename })
     
     local nodes
     if success and context then
         nodes = build_tree_from_context(context)
+        
+        last_state.class_name = filename
+        last_state.tree_ref = tree_instance
+        last_state.files = {}
+        if context.current then
+            if context.current.header then
+                local b = vim.fn.bufnr(context.current.header)
+                if b > 0 then last_state.ticks[b] = vim.api.nvim_buf_get_changedtick(b) end
+            end
+            if context.current.cpp then
+                local b = vim.fn.bufnr(context.current.cpp)
+                if b > 0 then last_state.ticks[b] = vim.api.nvim_buf_get_changedtick(b) end
+            end
+        end
     else
-        local map, global, list = parse_file_content(buf_name)
+        -- フォールバック
+        local registry = IDRegistry.new()
+        -- ★追加: フォールバック時の重複チェック用
+        local render_seen_ids = {}
+        local map, global, list = parse_file_content(buf_name, registry)
         nodes = {}
         for _, cdata in ipairs(list) do
-            local node = build_class_node(cdata)
+            local node = build_class_node(cdata, registry, render_seen_ids)
             node:expand()
             table.insert(nodes, node)
         end
+        
         if #global.methods > 0 or #global.fields > 0 then
             local g_children = {}
-            for _, item in ipairs(global.methods) do table.insert(g_children, Tree.Node(item)) end
-            for _, item in ipairs(global.fields) do table.insert(g_children, Tree.Node(item)) end
-            local g_node = Tree.Node({ text = "Global", kind = "Info", id = "global_scope" }, g_children)
+            for _, item in ipairs(global.methods) do 
+                local safe_id = safe_node_id(item.id, render_seen_ids)
+                table.insert(g_children, Tree.Node(vim.tbl_extend("force", item, {id=safe_id}))) 
+            end
+            for _, item in ipairs(global.fields) do 
+                local safe_id = safe_node_id(item.id, render_seen_ids)
+                table.insert(g_children, Tree.Node(vim.tbl_extend("force", item, {id=safe_id}))) 
+            end
+            
+            local raw_gid = registry:get("global_scope")
+            local safe_gid = safe_node_id(raw_gid, render_seen_ids)
+            
+            local g_node = Tree.Node({ 
+                text = "Global", 
+                kind = "Info", 
+                id = safe_gid 
+            }, g_children)
             table.insert(nodes, g_node)
         end
+        
+        last_state.class_name = filename
+        last_state.tree_ref = tree_instance
+        last_state.ticks[current_buf] = current_tick
     end
 
     tree_instance:set_nodes(nodes)

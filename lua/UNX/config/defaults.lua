@@ -9,11 +9,14 @@ M.defaults = {
         },
     },
     -- ★追加: ログ設定 (UNLの仕様に合わせる)
-    logging = {
-        level = "info",
-        file = { enable = true, filename = "unx.log" },
-        notify = { level = "warn", prefix = "[UNX]" },
-    },
+  cache = { dirname = "UNX" },
+  logging = {
+    level = "info",
+    echo = { level = "warn" },
+    notify = { level = "error", prefix = "[UNX]" },
+    file = { level = "debug", enable = true, max_kb = 512, rotate = 3, filename = "unx.log" },
+    perf = { enabled = false, patterns = { "^refresh" }, level = "trace" },
+  },
     -- ハイライト設定
     highlights = {
         UNXDirectoryIcon = { fg = "#73CEF4" },

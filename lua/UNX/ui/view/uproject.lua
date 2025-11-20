@@ -3,7 +3,6 @@ local Tree = require("nui.tree")
 local Line = require("nui.line")
 local unl_api = require("UNL.api")
 local unl_finder = require("UNL.finder")
--- ★追加: Gitモジュール
 local unx_git = require("UNX.git")
 local fs = require("vim.fs")
 
@@ -32,6 +31,8 @@ local function get_opened_buffers_status()
         if vim.fn.buflisted(buffer) ~= 0 then
             local name = vim.api.nvim_buf_get_name(buffer)
             if name == "" then name = "[No Name]#" .. buffer end
+            -- パス正規化
+            name = name:gsub("\\", "/")
             opened_buffers[name] = { modified = vim.bo[buffer].modified }
         end
     end
@@ -40,17 +41,16 @@ end
 
 local function get_git_icon_and_hl(status_code)
     local icons = config.uproject and config.uproject.git_icons or {}
-    if status_code == "M" then return icons.Modified or "M", "UNXGitModified" end
-    if status_code == "A" then return icons.Added or "A", "UNXGitAdded" end
-    if status_code == "D" then return icons.Deleted or "D", "UNXGitDeleted" end
-    if status_code == "R" then return icons.Renamed or "R", "UNXGitRenamed" end
-    if status_code == "C" then return icons.Conflict or "C", "UNXGitConflict" end
-    if status_code == "??" then return icons.Untracked or "?", "UNXGitUntracked" end
-    if status_code == "!!" then return icons.Ignored or "!", "UNXGitIgnored" end
+    if status_code == "M" then return icons.Modified or "", "UNXGitModified" end
+    if status_code == "A" then return icons.Added or "✚", "UNXGitAdded" end
+    if status_code == "D" then return icons.Deleted or "✖", "UNXGitDeleted" end
+    if status_code == "R" then return icons.Renamed or "➜", "UNXGitRenamed" end
+    if status_code == "C" then return icons.Conflict or "", "UNXGitConflict" end
+    if status_code == "??" then return icons.Untracked or "★", "UNXGitUntracked" end
+    if status_code == "!!" then return icons.Ignored or "◌", "UNXGitIgnored" end
     return "", "UNXFileName"
 end
 
--- 通常のファイルシステムスキャン (フォールバック用)
 local function scan_directory(path)
     local items = {}
     local handle = vim.loop.fs_scandir(path)
@@ -60,7 +60,7 @@ local function scan_directory(path)
             if not name then break end
             
             local full_path = fs.joinpath(path, name)
-            -- 隠しファイルスキップ (簡易)
+            -- 隠しファイルスキップ (.gitなど)
             if not name:match("^%.") then 
                 local is_dir = (type == "directory")
                 table.insert(items, {
@@ -68,15 +68,14 @@ local function scan_directory(path)
                     id = full_path,
                     path = full_path,
                     type = is_dir and "directory" or "file",
-                    _has_children = is_dir -- ディレクトリなら展開可能とする
+                    _has_children = is_dir
                 })
             end
         end
     end
-    -- ディレクトリ優先ソート
     table.sort(items, function(a, b)
         if a.type == b.type then return a.text < b.text end
-        return a.type == "directory"
+        return a.type == "directory" -- ディレクトリ先頭
     end)
     return items
 end
@@ -125,8 +124,10 @@ local function fetch_root_data()
         })
         last_context.engine_root = engine_root
 
-        -- Git更新
-        unx_git.refresh(project_info.root, function() if active_tree then active_tree:render() end end)
+        -- Git更新トリガー
+        unx_git.refresh(project_info.root, function() 
+            if active_tree then active_tree:render() end 
+        end)
 
         local success, result = unl_api.provider.request("uep.build_tree_model", {
             capability = "uep.build_tree_model",
@@ -149,28 +150,19 @@ local function fetch_root_data()
     last_context.mode = "normal"
     last_context.project_root = cwd
     
-    -- Git更新 (通常のGitリポジトリなら反応する)
-    unx_git.refresh(cwd, function() if active_tree then active_tree:render() end end)
+    -- Git更新トリガー
+    unx_git.refresh(cwd, function() 
+        if active_tree then active_tree:render() end 
+    end)
 
-    -- CWD直下をスキャンして表示
-    local root_node = Tree.Node({
-        text = vim.fn.fnamemodify(cwd, ":t"),
-        id = cwd,
-        path = cwd,
-        type = "directory",
-        _has_children = true
-    }, {}) -- 初期は空、展開時にロード
-    root_node:expand() -- 最初から展開状態にする
-    
-    -- ルート直下のファイルを取得してセット
-    local children = scan_directory(cwd)
-    -- Nuiの仕様上、Node作成時にchildrenを渡すか、後で set_nodes する
-    -- ここではルートノード1つを返し、その子供を即座にロードした状態にする
+    local root_children = scan_directory(cwd)
     local nui_children = {}
-    for _, item in ipairs(children) do
+    for _, item in ipairs(root_children) do
         table.insert(nui_children, Tree.Node(item))
     end
-    root_node = Tree.Node({
+    
+    -- ルートノードを作成
+    local root_node = Tree.Node({
         text = vim.fn.fnamemodify(cwd, ":t") .. " (File System)",
         id = cwd,
         path = cwd,
@@ -185,7 +177,7 @@ local function lazy_load_children(tree_instance, parent_node)
     if parent_node:has_children() then return end
     
     if last_context.mode == "uep" then
-        -- UEPモード: プロバイダーに問い合わせ
+        -- UEP Lazy Load
         local success, children = unl_api.provider.request("uep.load_tree_children", {
             capability = "uep.load_tree_children",
             project_root = last_context.project_root,
@@ -208,7 +200,7 @@ local function lazy_load_children(tree_instance, parent_node)
             tree_instance:set_nodes(nui_children, parent_node:get_id())
         end
     else
-        -- 通常モード: fs_scandir でスキャン
+        -- Normal Lazy Load
         local children = scan_directory(parent_node.path)
         local nui_children = {}
         for _, item in ipairs(children) do
@@ -258,10 +250,13 @@ local function prepare_node(node)
     line:append(icon_text .. " ", icon_hl)
 
     local path = node.path or node.id
+    -- パス正規化 (Gitキャッシュキーと一致させるため)
+    if path then path = path:gsub("\\", "/") end
+
     local opened = get_opened_buffers_status()
-    local is_modified = opened[path] and opened[path].modified
+    local is_modified_buf = opened[path] and opened[path].modified
     
-    -- Gitステータス取得 (キャッシュから)
+    -- Gitステータス取得
     local git_stat = unx_git.get_status(path)
 
     local name_hl = "UNXFileName"
@@ -272,7 +267,7 @@ local function prepare_node(node)
     if git_stat then
         local g_icon, g_hl = get_git_icon_and_hl(git_stat)
         line:append(" " .. g_icon, g_hl)
-    elseif is_modified then
+    elseif is_modified_buf then
         local m_icon = config.uproject.icon.modified or "[+]"
         line:append(m_icon, "UNXModifiedIcon")
     end
@@ -287,12 +282,12 @@ end
 function M.setup(user_config)
     config = user_config
     
-    -- ファイル保存時にGitステータス更新
+    -- イベント連動: ファイル保存時やシェル操作後にGitステータスを更新
     vim.api.nvim_create_autocmd({ "BufWritePost", "FileChangedShellPost", "FocusGained" }, {
         callback = function()
             if active_tree and last_context.project_root then
                 unx_git.refresh(last_context.project_root, function()
-                    active_tree:render()
+                    if active_tree then active_tree:render() end
                 end)
             end
         end
