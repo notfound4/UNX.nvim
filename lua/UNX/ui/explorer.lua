@@ -27,14 +27,12 @@ function M.setup(opts)
     -- 自動更新イベント
     vim.api.nvim_create_autocmd({ "BufEnter", "BufWritePost" }, {
         group = state.augroup,
-        callback = function(args) -- argsを受け取る
+        callback = function(args)
             local ft = vim.bo.filetype
             if ft ~= "c" and ft ~= "cpp" then return end
 
             if state.class_func_split and state.class_func_split.winid and vim.api.nvim_win_is_valid(state.class_func_split.winid) then
-                -- ★修正: 保存時(BufWritePost)なら強制更新フラグを立てる
                 local is_force = (args.event == "BufWritePost")
-                
                 ViewSymbols.update(state.class_func_tree, state.class_func_split.winid, { force = is_force })
             end
         end,
@@ -89,6 +87,7 @@ function M.open()
     map_quit(state.uproject_split)
     map_quit(state.class_func_split)
 
+    -- Enterキーのマッピング
     for _, key in ipairs(config.keymaps.open or {"<CR>"}) do
         state.uproject_split:map("n", key, function()
             ViewUproject.on_node_action(state.uproject_tree, state.uproject_split, state.class_func_split)
@@ -98,6 +97,21 @@ function M.open()
             ViewSymbols.on_node_action(state.class_func_tree, state.class_func_split, state.uproject_split)
         end)
     end
+
+    -- ★ マウス操作のマッピング (ダブルクリックで実行)
+    local function map_mouse(split, tree, view_mod)
+        split:map("n", "<2-LeftMouse>", function()
+            local mouse = vim.fn.getmousepos()
+            if mouse.winid == split.winid then
+                vim.api.nvim_set_current_win(mouse.winid)
+                vim.api.nvim_win_set_cursor(mouse.winid, {mouse.line, 0})
+                view_mod.on_node_action(tree, state.uproject_split, state.class_func_split)
+            end
+        end)
+    end
+    
+    map_mouse(state.uproject_split, state.uproject_tree, ViewUproject)
+    map_mouse(state.class_func_split, state.class_func_tree, ViewSymbols)
 end
 
 function M.refresh()
