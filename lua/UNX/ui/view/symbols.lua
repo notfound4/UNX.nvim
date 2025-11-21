@@ -7,30 +7,25 @@ local IDRegistry = require("UNX.common.id_registry")
 local logger = require("UNX.logger")
 local unl_open = require("UNL.buf.open")
 
+-- ★追加: コンテキスト
+local ctx_symbols = require("UNX.context.symbols")
+
 local M = {}
 local config = {}
 
-local function log_debug(msg)
-    logger.get().debug(msg)
-end
-
-local function log_error(msg)
-    logger.get().error(msg)
-end
-
-local last_state = {
-    class_name = nil,
-    ticks = {},
-    tree_ref = nil,
-    cancel_func = nil,
+-- ★変更: 状態管理の分離
+-- 1. UI/Runtime状態 (保存しない・再起動でリセットされるもの)
+local runtime_state = {
+    ticks = {},         -- バッファごとの変更tick
+    tree_ref = nil,     -- Nui Treeインスタンスへの参照
+    cancel_func = nil,  -- 非同期処理のキャンセル関数
 }
 
 local debounce_timer = nil
 
 -- ======================================================
--- 2. DATA STRUCTURE HELPERS (変更なし)
+-- 2. DATA STRUCTURE HELPERS
 -- ======================================================
--- (省略... 前回のコードと同じ)
 local function new_class_data(text, kind, line, id, file_path)
     local default_access = (kind == "Struct" or kind == "UStruct") and "public" or "private"
     return {
@@ -122,7 +117,6 @@ local function build_class_node(class_data, registry, render_seen_ids)
         table.insert(children, group_node)
     end
 
-    -- ★修正: "impl" をループから除外し、Implementationsグループのみで表示するように変更
     local func_group_children = {}
     for _, access in ipairs({"public", "protected", "private"}) do
         local items = class_data.methods[access]
@@ -176,7 +170,7 @@ local function build_class_node(class_data, registry, render_seen_ids)
 end
 
 -- ======================================================
--- 3. PARSING HELPERS (変更なし)
+-- 3. PARSING HELPERS
 -- ======================================================
 local function get_node_text(node, bufnr)
     if not node then return "" end
@@ -259,7 +253,7 @@ local function is_type_reference(node)
 end
 
 -- ======================================================
--- 4. CORE PARSING LOGIC (変更なし)
+-- 4. CORE PARSING LOGIC
 -- ======================================================
 local function parse_file_content(file_path, registry)
     if not file_path or file_path == "" or vim.fn.filereadable(file_path) == 0 then 
@@ -274,7 +268,8 @@ local function parse_file_content(file_path, registry)
 
     local ok, parser = pcall(vim.treesitter.get_parser, bufnr, "cpp")
     if not ok or not parser then 
-        log_debug("Failed to get parser for " .. file_path)
+        -- ★変更: 直接loggerを使用
+        logger.get().debug("Failed to get parser for " .. file_path)
         return {}, new_global_data(), {} 
     end
 
@@ -420,7 +415,7 @@ local function parse_file_content(file_path, registry)
 end
 
 -- ======================================================
--- 5. BUILDERS (Async / Coroutine) (変更なし)
+-- 5. BUILDERS (Async / Coroutine)
 -- ======================================================
 local function build_tree_from_context_async(context, registry, render_seen_ids)
     local root_nodes = {}
@@ -449,7 +444,8 @@ local function build_tree_from_context_async(context, registry, render_seen_ids)
 
     local current_info = context.current
     if not current_info or not current_info.header then 
-        log_debug("build_tree: current_info or header is nil")
+        -- ★変更: 直接loggerを使用
+        logger.get().debug("build_tree: current_info or header is nil")
         return root_nodes 
     end
 
@@ -609,27 +605,34 @@ function M.update(tree_instance, target_winid, opts)
         if not filename or filename == "" then return end
         local current_tick = vim.api.nvim_buf_get_changedtick(current_buf_delayed)
 
-        if not opts.force and last_state.class_name == filename 
-           and last_state.ticks[current_buf_delayed] == current_tick 
-           and last_state.tree_ref == tree_instance then
+        -- ★変更: Contextから前回表示したクラス名を取得
+        local state = ctx_symbols.get()
+        local last_class_name = state.class_name
+
+        -- ★変更: ローカルのキャッシュ(tick)とContext(class_name)で判定
+        if not opts.force and last_class_name == filename 
+           and runtime_state.ticks[current_buf_delayed] == current_tick 
+           and runtime_state.tree_ref == tree_instance then
             return
         end
 
-        if last_state.cancel_func then
-            last_state.cancel_func()
-            last_state.cancel_func = nil
+        -- ★変更: 非同期キャンセル処理
+        if runtime_state.cancel_func then
+            runtime_state.cancel_func()
+            runtime_state.cancel_func = nil
         end
 
         local is_cancelled = false
-        last_state.cancel_func = function() is_cancelled = true end
+        runtime_state.cancel_func = function() is_cancelled = true end
 
-        log_debug("Requesting class context for: " .. filename)
+        -- ★変更: 直接loggerを使用
+        logger.get().debug("Requesting class context for: " .. filename)
 
         unl_api.provider.request("uep.get_class_context", { 
             class_name = filename,
             on_complete = function(success, context)
                 if is_cancelled then 
-                    log_debug("Request cancelled.")
+                    logger.get().debug("Request cancelled.")
                     return 
                 end
                 
@@ -639,35 +642,38 @@ function M.update(tree_instance, target_winid, opts)
                     local render_seen_ids = {}
 
                     if success and context then
-                        log_debug("UEP returned context. Building async tree...")
+                        logger.get().debug("UEP returned context. Building async tree...")
                         nodes = build_tree_from_context_async(context, registry, render_seen_ids)
                     end
 
                     if not nodes or #nodes == 0 then
-                        log_debug("Nodes empty. Running fallback parse for: " .. buf_name_delayed)
+                        logger.get().debug("Nodes empty. Running fallback parse for: " .. buf_name_delayed)
                         nodes = build_tree_fallback(buf_name_delayed, registry, render_seen_ids)
                     else
-                        log_debug("Async tree build success. Nodes count: " .. #nodes)
+                        logger.get().debug("Async tree build success. Nodes count: " .. #nodes)
                     end
                     
-                    last_state.class_name = filename
-                    last_state.tree_ref = tree_instance
-                    last_state.ticks[current_buf_delayed] = current_tick
+                    -- ★変更: 状態の保存
+                    state.class_name = filename
+                    ctx_symbols.set(state) -- Contextに保存
+
+                    runtime_state.tree_ref = tree_instance
+                    runtime_state.ticks[current_buf_delayed] = current_tick
 
                     if not is_cancelled then
-                        log_debug("Scheduling render update for " .. filename)
+                        logger.get().debug("Scheduling render update for " .. filename)
                         vim.schedule(function()
                             if is_cancelled then 
-                                log_debug("Render cancelled in schedule")
+                                logger.get().debug("Render cancelled in schedule")
                                 return 
                             end
                             
                             if not tree_instance then 
-                                log_debug("Tree instance gone, skip render")
+                                logger.get().debug("Tree instance gone, skip render")
                                 return 
                             end
                             
-                            log_debug("Rendering tree with " .. #nodes .. " nodes for " .. filename)
+                            logger.get().debug("Rendering tree with " .. #nodes .. " nodes for " .. filename)
                             
                             local render_ok, render_err = pcall(function()
                                 tree_instance:set_nodes(nodes)
@@ -675,9 +681,9 @@ function M.update(tree_instance, target_winid, opts)
                             end)
                             
                             if not render_ok then
-                                log_error("Render failed: " .. tostring(render_err))
+                                logger.get().error("Render failed: " .. tostring(render_err))
                             else
-                                log_debug("Render complete")
+                                logger.get().debug("Render complete")
                             end
                             
                             if target_winid and vim.api.nvim_win_is_valid(target_winid) then
@@ -686,8 +692,9 @@ function M.update(tree_instance, target_winid, opts)
                                 pcall(vim.api.nvim_win_set_option, target_winid, "winbar", string.format("%%#UNXGitFunction# %s %s", icon, filename))
                             end
                             
-                            if last_state.class_name == filename then
-                                 last_state.cancel_func = nil
+                            -- Contextから最新を取得して比較
+                            if ctx_symbols.get().class_name == filename then
+                                 runtime_state.cancel_func = nil
                             end
                         end)
                     end
@@ -699,7 +706,7 @@ function M.update(tree_instance, target_winid, opts)
                     if coroutine.status(co) == "suspended" then
                         local ok, err = coroutine.resume(co)
                         if not ok then
-                            log_error("Coroutine failed: " .. tostring(err))
+                            logger.get().error("Coroutine failed: " .. tostring(err))
                             return
                         end
                         if coroutine.status(co) ~= "dead" then
@@ -727,14 +734,12 @@ function M.on_node_action(tree_instance, split_instance, other_split_instance)
         tree_instance:render()
     elseif node.line then
         if node.file_path then
-             -- ★修正: UNL.buf.open.safe を使用してファイルを開く
              unl_open.safe({
                 file_path = node.file_path,
                 open_cmd = "edit",
                 plugin_name = "UNX",
-                split_cmd = "vertical botright split", -- ★これ追加
+                split_cmd = "vertical botright split",
             })
-            -- ジャンプ
             vim.api.nvim_win_set_cursor(0, { node.line, 0 })
             vim.cmd("normal! zz")
         end
