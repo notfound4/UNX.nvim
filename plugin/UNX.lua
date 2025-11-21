@@ -9,20 +9,30 @@ local builder = require("UNL.command.builder")
 local subcommands = {
     open = {
         desc = "Open the explorer window",
-        handler = function(args) -- 修正: impl -> handler
-            require("UNX.ui.explorer").open()
+        handler = function(args)
+            -- ★変更: API経由で呼び出し
+            require("UNX.api").explorer_open()
         end,
     },
     refresh = {
         desc = "Refresh the explorer tree",
-        handler = function(args) -- 修正: impl -> handler
-            require("UNX.ui.explorer").refresh()
+        handler = function(args)
+            -- ★変更: API経由で呼び出し
+            require("UNX.api").explorer_refresh()
         end,
     },
     close = {
         desc = "Close the explorer window",
-        handler = function(args) -- 修正: impl -> handler
-          require("UNX.ui.explorer").close()
+        handler = function(args)
+            -- ★変更: API経由で呼び出し
+            require("UNX.api").explorer_close()
+        end,
+    },
+    -- ★追加: APIにある toggle もコマンドとして使えるように追加
+    toggle = {
+        desc = "Toggle the explorer window",
+        handler = function(args)
+            require("UNX.api").explorer_toggle()
         end,
     }
 }
