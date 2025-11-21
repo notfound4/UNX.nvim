@@ -175,7 +175,7 @@ switch_layout = function(target_tab)
 
     if not ui.win_main or not vim.api.nvim_win_is_valid(ui.win_main) then return end
 
-    if target_tab == "uproject" then
+if target_tab == "uproject" then
         vim.api.nvim_win_set_buf(ui.win_main, ui.buf_uproject)
         
         if not ui.win_sub or not vim.api.nvim_win_is_valid(ui.win_sub) then
@@ -192,10 +192,13 @@ switch_layout = function(target_tab)
             vim.api.nvim_set_current_win(ui.win_main)
         end
         
-        vim.api.nvim_win_set_buf(ui.win_sub, ui.buf_symbols)
-        
-        if vim.bo.filetype:match("cpp") then
-             ViewSymbols.update(ui.class_func_tree, ui.win_sub, { force = true })
+        -- ★修正: ウィンドウ作成に失敗していないか確認してからバッファをセット
+        if ui.win_sub and vim.api.nvim_win_is_valid(ui.win_sub) then
+            vim.api.nvim_win_set_buf(ui.win_sub, ui.buf_symbols)
+            
+            if vim.bo.filetype:match("cpp") then
+                 ViewSymbols.update(ui.class_func_tree, ui.win_sub, { force = true })
+            end
         end
 
     elseif target_tab == "insights" then
