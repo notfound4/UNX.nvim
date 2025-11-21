@@ -72,7 +72,7 @@ local function apply_split_keymaps(uproject_split, class_func_split, insights_sp
         end
     end
     
-    local function map_mouse_action_dclick(split)
+local function map_mouse_action_dclick(split)
         pcall(split.unmap, split, "n", "<2-LeftMouse>")
         split:map("n", "<2-LeftMouse>", function()
             local mouse = vim.fn.getmousepos()
@@ -85,6 +85,11 @@ local function apply_split_keymaps(uproject_split, class_func_split, insights_sp
                 
                 vim.api.nvim_set_current_win(mouse.winid)
                 
+                -- ★修正: カーソルをマウスの位置に移動させるロジックを復活させる
+                -- pcallで保護し、万が一のカーソルエラーを回避
+                pcall(vim.api.nvim_win_set_cursor, mouse.winid, {mouse.line, 0})
+                
+                -- ノードアクションの実行
                 if vim.api.nvim_get_current_win() == state.uproject_split.winid then
                     ViewUproject.on_node_action(state.uproject_tree, state.uproject_split, state.class_func_split)
                 elseif vim.api.nvim_get_current_win() == state.class_func_split.winid then
@@ -105,11 +110,12 @@ local function apply_split_keymaps(uproject_split, class_func_split, insights_sp
     map_node_action(class_func_split)
     map_node_action(insights_split)
     
+    -- ★修正: ダブルクリックマッピングを有効化
     map_mouse_action_dclick(uproject_split)
     map_mouse_action_dclick(class_func_split)
     map_mouse_action_dclick(insights_split)
     
-    -- Quit keymap
+    -- Quit keymap (省略)
     for _, key in ipairs(config.keymaps.close or {"q"}) do
         uproject_split:map("n", key, function() state.current_layout:unmount() end, { noremap = true })
         class_func_split:map("n", key, function() state.current_layout:unmount() end, { noremap = true })
