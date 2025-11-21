@@ -18,6 +18,7 @@ function M.setup(user_config)
     -- ★追加: "UNX" という名前でロガーを初期化
     -- これで provider.request 時の logger_name = "UNX" が正しく機能します
     unl_log.setup("UNX", default_config, user_config)
+    require("UNX.provider.init").setup()
 
     setup_highlights(M.config.highlights)
     

@@ -393,4 +393,10 @@ function M.refresh()
     end
 end
 
+function M.is_open()
+    local uproject_split = state.uproject_split
+    -- uproject_split が存在し、かつその winid が有効なウィンドウである場合に true を返す
+    return uproject_split and uproject_split.winid and vim.api.nvim_win_is_valid(uproject_split.winid)
+end
+
 return M
