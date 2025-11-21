@@ -10,7 +10,10 @@ local utils = require("UNX.common.utils")
 local file_actions = require("UNX.ui.view.action.files")
 local unl_open = require("UNL.buf.open")
 
--- ★Contextモジュール
+-- ★追加: UNL.path を読み込む
+local unl_path = require("UNL.path")
+
+-- ★追加: コンテキスト
 local ctx_uproject = require("UNX.context.uproject")
 
 -- UNL Events
@@ -22,9 +25,6 @@ local has_devicons, devicons = pcall(require, "nvim-web-devicons")
 
 local M = {}
 local config = {}
-
--- ★削除: local last_context = { ... }
--- 代わりに ctx_uproject を使用します
 
 -- UIランタイムオブジェクト (これらは保存しないのでローカル変数のまま)
 local active_tree = nil
@@ -76,7 +76,8 @@ local function scan_directory(path)
                 local is_dir = (type == "directory")
                 table.insert(items, {
                     text = name,
-                    id = utils.normalize_path(full_path),
+                    -- ★修正: unl_path.normalize を使用
+                    id = unl_path.normalize(full_path),
                     path = full_path,
                     type = is_dir and "directory" or "file",
                     _has_children = is_dir
@@ -106,7 +107,8 @@ local function convert_uep_to_nui(uep_node)
 
     local nui_node = Tree.Node({
         text = uep_node.name,
-        id = uep_node.id or (uep_node.path and utils.normalize_path(uep_node.path)),
+        -- ★修正: unl_path.normalize を使用
+        id = uep_node.id or (uep_node.path and unl_path.normalize(uep_node.path)),
         path = uep_node.path,
         type = uep_node.type,
         _has_children = uep_node.has_children or (children and #children > 0),
@@ -175,14 +177,14 @@ end
 local function lazy_load_children(tree_instance, parent_node)
     if parent_node:has_children() then return end
     
-    -- ★ Context取得 (last_context の代わり)
+    -- ★ Context取得
     local ctx = ctx_uproject.get()
     
     if ctx.mode == "uep" then
         local success, children = unl_api.provider.request("uep.load_tree_children", {
             capability = "uep.load_tree_children",
-            project_root = ctx.project_root, -- ★
-            engine_root = ctx.engine_root,   -- ★
+            project_root = ctx.project_root, 
+            engine_root = ctx.engine_root,   
             node = { 
                 id = parent_node.id, 
                 path = parent_node.path,
@@ -287,8 +289,12 @@ local function prepare_node(node)
     end
 
     local path = node.path or node.id
-    local norm_path = utils.normalize_path(path)
+    -- ★修正: unl_path.normalize を使用
+    local norm_path = unl_path.normalize(path)
+    
+    -- Gitステータス取得
     local git_stat = unx_git.get_status(norm_path)
+    
     local name_hl = "UNXFileName"
     if git_stat then 
         _, name_hl = utils.get_git_icon_and_hl(git_stat, config)

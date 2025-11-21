@@ -1,15 +1,6 @@
+local unl_path = require("UNL.path")
 local M = {}
 
--- パス正規化 (Windows対応: セパレータ統一 & 小文字化)
-local is_windows = vim.fn.has("win32") == 1 or vim.fn.has("wsl") == 1
-function M.normalize_path(path)
-  if not path then return nil end
-  local p = path:gsub("\\", "/")
-  if is_windows then
-    p = p:lower()
-  end
-  return p
-end
 
 -- 開いているバッファの変更状態を取得
 function M.get_opened_buffers_status()
@@ -18,7 +9,7 @@ function M.get_opened_buffers_status()
         if vim.fn.buflisted(buffer) ~= 0 then
             local name = vim.api.nvim_buf_get_name(buffer)
             if name == "" then name = "[No Name]#" .. buffer end
-            local norm_name = M.normalize_path(name)
+            local norm_name = unl_path.normalize(name)
             if norm_name then
                 opened_buffers[norm_name] = { modified = vim.bo[buffer].modified }
             end

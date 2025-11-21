@@ -1,79 +1,105 @@
 -- lua/UNX/git.lua
+-- ★変更: UNX.common.utils ではなく UNL.path を使用
+local unl_path = require("UNL.path")
 local M = {}
-local status_cache = {}
-local is_running = false
 
--- Gitステータスを非同期で更新
-function M.refresh(root_path, on_complete)
-    if is_running or not root_path then return end
-    
-    -- ルートパスの正規化（末尾スラッシュ削除）
-    root_path = root_path:gsub("\\", "/"):gsub("/$", "")
-    
-    is_running = true
-    
-    -- core.quotepath=false を指定して日本語ファイル名などのエスケープを防ぐ
-    -- Windowsパス問題を防ぐため、相対パスで取得し、Lua側で絶対パス化する
-    local cmd = { "git", "-C", root_path, "-c", "core.quotepath=false", "status", "--porcelain", "-uall" }
-    local stdout = {}
+-- キャッシュ: [正規化されたパス] = "ステータスコード"
+local git_status_cache = {}
 
-    vim.fn.jobstart(cmd, {
-        stdout_buffered = true,
-        on_stdout = function(_, data)
-            if data then
-                for _, line in ipairs(data) do
-                    if line ~= "" then table.insert(stdout, line) end
-                end
-            end
-        end,
-        on_exit = function(_, code)
-            is_running = false
-            if code == 0 then
-                local new_cache = {}
-                for _, line in ipairs(stdout) do
-                    if #line > 3 then
-                        local status_code = line:sub(1, 2)
-                        -- ステータスコード以降のファイルパスを取得
-                        local rel_path = line:sub(4)
-                        -- 引用符があれば除去
-                        rel_path = rel_path:gsub('^"(.*)"$', "%1")
-                        
-                        -- 絶対パス化してキーにする (Windowsセパレータ対応)
-                        local abs_path = root_path .. "/" .. rel_path
-                        abs_path = abs_path:gsub("\\", "/")
-                        
-                        local s = nil
-                        -- ステータス判定ロジック
-                        if status_code:match("M") then s = "M"
-                        elseif status_code:match("A") then s = "A"
-                        elseif status_code:match("D") then s = "D"
-                        elseif status_code:match("R") then s = "R"
-                        elseif status_code:match("C") then s = "C"
-                        elseif status_code:match("%?") then s = "??"
-                        elseif status_code:match("!") then s = "!!"
-                        end
-                        
-                        if s then new_cache[abs_path] = s end
-                    end
-                end
-                status_cache = new_cache
-            else
-                -- 失敗時キャッシュクリア
-                status_cache = {}
-            end
-            
-            -- 完了コールバック
-            if on_complete then vim.schedule(on_complete) end
-        end
-    })
+-- Windows判定 (キャッシュキー生成用)
+local is_windows = vim.fn.has("win32") == 1 or vim.fn.has("wsl") == 1
+
+--- キャッシュ用のキーを生成するヘルパー
+-- UNL.path.normalize を使いつつ、Windowsの場合は小文字化してキーの一致を保証する
+local function make_key(path)
+    local p = unl_path.normalize(path)
+    if p and is_windows then
+        return p:lower()
+    end
+    return p
 end
 
--- 指定パスのステータスを取得
+--- Gitステータスを解析する内部関数
+local function parse_git_status(root_path, output_str)
+    local new_cache = {}
+    
+    for line in output_str:gmatch("[^\r\n]+") do
+        if #line > 3 then
+            -- 1-2文字目がステータス
+            local status = line:sub(1, 2):gsub("%s", "")
+            
+            -- 4文字目以降がファイルパス
+            local rel_path = line:sub(4)
+            
+            -- クォート除去
+            if rel_path:sub(1, 1) == '"' then
+                rel_path = rel_path:sub(2, -2)
+            end
+
+            -- 絶対パスを作成 (UNL.path.join を使っても良いですが、単純結合で十分です)
+            local abs_path = root_path .. "/" .. rel_path
+            
+            -- ★重要: make_key (UNL.path利用) でキーを作成
+            local key = make_key(abs_path)
+            
+            if key then
+                new_cache[key] = status
+            end
+        end
+    end
+    
+    return new_cache
+end
+
+--- 指定したルートディレクトリで git status を更新する (非同期)
+function M.refresh(root_path, on_complete)
+    if not root_path then return end
+
+    local stdout = vim.loop.new_pipe(false)
+    local stderr = vim.loop.new_pipe(false)
+    local output_data = ""
+
+    local handle, pid
+    handle, pid = vim.loop.spawn("git", {
+        args = { "status", "--porcelain", "-u", "--no-renames" },
+        cwd = root_path,
+        stdio = { nil, stdout, stderr }
+    }, function(code, signal)
+        stdout:read_stop()
+        stderr:read_stop()
+        stdout:close()
+        stderr:close()
+        handle:close()
+
+        if code == 0 then
+            vim.schedule(function()
+                git_status_cache = parse_git_status(root_path, output_data)
+                if on_complete then
+                    on_complete()
+                end
+            end)
+        end
+    end)
+
+    if handle then
+        vim.loop.read_start(stdout, function(err, data)
+            assert(not err, err)
+            if data then output_data = output_data .. data end
+        end)
+        vim.loop.read_start(stderr, function(err, data) end)
+    end
+end
+
+--- パスのGitステータスを取得する
 function M.get_status(path)
     if not path then return nil end
-    -- 検索キーも正規化
-    path = path:gsub("\\", "/")
-    return status_cache[path]
+    -- ★重要: 検索時も make_key を通す
+    return git_status_cache[make_key(path)]
+end
+
+--- キャッシュをクリアする
+function M.clear()
+    git_status_cache = {}
 end
 
 return M
