@@ -75,6 +75,17 @@ M.defaults = {
             "unx-explorer",
         },
     },
+   insights_ui = { -- ★★★ 新規追加 ★★★
+        icon = {
+            -- ノードが子を持つ場合のアイコン（=フォルダ/グループ）
+            group_icon_open = "",      -- ★★★ 開いているフォルダアイコン ★★★
+            group_icon_closed = "",    -- ★★★ 閉じているフォルダアイコン ★★★
+            group_icon_hl = "UNXDirectoryIcon",
+            -- ノードが子を持たない場合のアイコン（=関数/イベント）
+            leaf_icon = "󰊕", 
+            leaf_icon_hl = "Function",
+        },
+    },
     keymaps = {
         close = { "q" },
         open = { "<CR>", "o" },

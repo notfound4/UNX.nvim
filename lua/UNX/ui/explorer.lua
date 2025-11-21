@@ -253,7 +253,26 @@ function M.setup(opts)
     ViewUproject.setup(config)
     ViewSymbols.setup(config)
     ViewInsights.setup(config)
-    
+
+    local unl_api_ok, unl_api = pcall(require, "UNL.api")
+    if unl_api_ok then
+        local unl_types_ok, unl_event_types = pcall(require, "UNL.event.types")
+        if unl_types_ok then
+            -- ULGからのON_REQUEST_TRACE_CALLEES_VIEW イベントを監視
+            require("UNL.event.events").subscribe(unl_event_types.ON_REQUEST_TRACE_CALLEES_VIEW, function(payload)
+                -- Insightsタブが非アクティブな場合は自動で切り替える
+                if state.current_layout ~= state.insights_layout then
+                    switch_layout(state.insights_layout, state.insights_split)
+                end
+                
+                if state.insights_tree and payload and payload.frame_data then
+                    -- ViewInsightsにデータを渡し、描画を要求する
+                    ViewInsights.set_data(payload.trace_handle, payload.frame_data)
+                end
+            end)
+        end
+    end
+
     -- 自動更新イベント
     vim.api.nvim_create_autocmd({ "BufEnter", "BufWritePost" }, {
         group = state.augroup,
