@@ -122,25 +122,22 @@ local function build_class_node(class_data, registry, render_seen_ids)
         table.insert(children, group_node)
     end
 
+    -- ★修正: "impl" をループから除外し、Implementationsグループのみで表示するように変更
     local func_group_children = {}
-    for _, access in ipairs({"public", "protected", "private", "impl"}) do
+    for _, access in ipairs({"public", "protected", "private"}) do
         local items = class_data.methods[access]
         if items and #items > 0 then
-            if access == "impl" then
-                for _, item in ipairs(items) do table.insert(func_group_children, make_item_node(item)) end
-            else
-                local access_node_children = {}
-                for _, item in ipairs(items) do table.insert(access_node_children, make_item_node(item)) end
-                
-                local access_node = Tree.Node({ 
-                    text = access .. ":", 
-                    kind = "Access", 
-                    id = make_group_id("_m_" .. access) 
-                }, access_node_children)
-                
-                access_node:expand()
-                table.insert(func_group_children, access_node)
-            end
+            local access_node_children = {}
+            for _, item in ipairs(items) do table.insert(access_node_children, make_item_node(item)) end
+            
+            local access_node = Tree.Node({ 
+                text = access .. ":", 
+                kind = "Access", 
+                id = make_group_id("_m_" .. access) 
+            }, access_node_children)
+            
+            access_node:expand()
+            table.insert(func_group_children, access_node)
         end
     end
     
