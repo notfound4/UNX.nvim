@@ -57,13 +57,31 @@ M.defaults = {
             },
         },
     },
+    -- ★追加: Safe Open 設定
+    safe_open = {
+        -- 開くのを避けるバッファタイプ
+        prevent_in_buftypes = {
+            "quickfix",
+            "help",
+            "terminal",
+            "prompt",
+        },
+        -- 開くのを避けるファイルタイプ
+        prevent_in_filetypes = {
+            "neo-tree",
+            "NvimTree",
+            "TelescopePrompt",
+            "fugitive",
+            "lazy",
+            "unx-explorer", -- UNX自身のバッファでも開かないようにする
+        },
+    },
     keymaps = {
         close = { "q" },
         open = { "<CR>", "o" },
         vsplit = "s",
         split = "i",
         
-        -- ★追加: ファイル操作アクション
         action_add = "a",
         action_delete = "d",
         action_move = "m",

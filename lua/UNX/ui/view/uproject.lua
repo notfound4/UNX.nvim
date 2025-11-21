@@ -7,6 +7,7 @@ local unx_git = require("UNX.git")
 local fs = require("vim.fs")
 local utils = require("UNX.common.utils")
 local file_actions = require("UNX.ui.view.action.files")
+local unl_open = require("UNL.buf.open")
 
 -- UNL Events
 local unl_events_ok, unl_events = pcall(require, "UNL.event.events")
@@ -351,18 +352,16 @@ function M.setup(user_config)
         end
     })
 
-    -- ★ UNLイベントによるツリー更新 (修正版)
+    -- UNLイベントによるツリー更新
     if unl_events_ok and unl_types_ok then
         local function on_cache_updated()
             if active_tree and last_context.project_root then
-                 -- UEPのキャッシュ更新完了後にツリー再構築を行う
                  vim.schedule(function()
                     M.refresh(active_tree)
                 end)
             end
         end
 
-        -- 以前のファイル操作イベント購読は削除し、UEPの更新完了イベントを購読する
         unl_events.subscribe(unl_event_types.ON_AFTER_UEP_LIGHTWEIGHT_REFRESH, on_cache_updated)
         unl_events.subscribe(unl_event_types.ON_AFTER_REFRESH_COMPLETED, on_cache_updated)
     end
@@ -420,17 +419,13 @@ function M.on_node_action(tree_instance, split_instance, other_split_instance)
         tree_instance:render()
     else
         if node.path then
-            local current_win = vim.api.nvim_get_current_win()
-            local wins = vim.api.nvim_list_wins()
-            local target_win = current_win
-            for _, w in ipairs(wins) do
-                if w ~= split_instance.winid and (not other_split_instance or w ~= other_split_instance.winid) then
-                    target_win = w
-                    break
-                end
-            end
-            vim.api.nvim_set_current_win(target_win)
-            vim.cmd("edit " .. vim.fn.fnameescape(node.path))
+             -- ★修正: vertical botright split で開く
+             unl_open.safe({
+                file_path = node.path,
+                open_cmd = "edit",
+                plugin_name = "UNX",
+                split_cmd = "vertical botright split",
+            })
         end
     end
 end

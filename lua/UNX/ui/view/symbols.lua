@@ -5,6 +5,7 @@ local unl_api = require("UNL.api")
 local Query = require("UNX.ui.view.query")
 local IDRegistry = require("UNX.common.id_registry")
 local logger = require("UNX.logger")
+local unl_open = require("UNL.buf.open")
 
 local M = {}
 local config = {}
@@ -29,7 +30,7 @@ local debounce_timer = nil
 -- ======================================================
 -- 2. DATA STRUCTURE HELPERS (変更なし)
 -- ======================================================
-
+-- (省略... 前回のコードと同じ)
 local function new_class_data(text, kind, line, id, file_path)
     local default_access = (kind == "Struct" or kind == "UStruct") and "public" or "private"
     return {
@@ -422,9 +423,8 @@ local function parse_file_content(file_path, registry)
 end
 
 -- ======================================================
--- 5. BUILDERS (Async / Coroutine)
+-- 5. BUILDERS (Async / Coroutine) (変更なし)
 -- ======================================================
-
 local function build_tree_from_context_async(context, registry, render_seen_ids)
     local root_nodes = {}
     
@@ -534,8 +534,6 @@ end
 -- ======================================================
 -- 6. RENDERER & API (Async Runner)
 -- ======================================================
--- (prepare_node, setup, create は変更なし)
-
 local function prepare_node(node)
     local line = Line()
     line:append(string.rep("  ", node:get_depth() - 1))
@@ -582,7 +580,6 @@ function M.create(bufnr)
     })
 end
 
--- ★★★ 修正: バッファチェックを緩和し、必ず描画を試みる ★★★
 function M.update(tree_instance, target_winid, opts)
     if not tree_instance then return end
     opts = opts or {}
@@ -594,7 +591,7 @@ function M.update(tree_instance, target_winid, opts)
     local ft = vim.bo[current_buf].filetype
     if ft == "unx-explorer" or ft == "neo-tree" or ft == "TelescopePrompt" or ft == "qf" then return end
 
-    -- デバウンス
+    local debounce_delay = 50
     if debounce_timer then
         debounce_timer:stop()
         if not debounce_timer:is_closing() then debounce_timer:close() end
@@ -602,13 +599,12 @@ function M.update(tree_instance, target_winid, opts)
     end
 
     debounce_timer = vim.loop.new_timer()
-    debounce_timer:start(50, 0, vim.schedule_wrap(function()
+    debounce_timer:start(debounce_delay, 0, vim.schedule_wrap(function()
         if debounce_timer then
             if not debounce_timer:is_closing() then debounce_timer:close() end
             debounce_timer = nil
         end
         
-        -- 再取得
         local current_buf_delayed = vim.api.nvim_get_current_buf()
         local buf_name_delayed = vim.api.nvim_buf_get_name(current_buf_delayed)
         if buf_name_delayed == "" then return end
@@ -640,8 +636,6 @@ function M.update(tree_instance, target_winid, opts)
                     return 
                 end
                 
-                -- ★ バッファチェックを削除: どこにいようと更新は続行する
-
                 local co = coroutine.create(function()
                     local nodes = {}
                     local registry = IDRegistry.new()
@@ -664,18 +658,30 @@ function M.update(tree_instance, target_winid, opts)
                     last_state.ticks[current_buf_delayed] = current_tick
 
                     if not is_cancelled then
-                         vim.schedule(function()
-                            if is_cancelled then return end
+                        log_debug("Scheduling render update for " .. filename)
+                        vim.schedule(function()
+                            if is_cancelled then 
+                                log_debug("Render cancelled in schedule")
+                                return 
+                            end
                             
-                            -- ★ tree_instance 自体がLuaオブジェクトとして生存していればOKとする
                             if not tree_instance then 
                                 log_debug("Tree instance gone, skip render")
                                 return 
                             end
                             
                             log_debug("Rendering tree with " .. #nodes .. " nodes for " .. filename)
-                            tree_instance:set_nodes(nodes)
-                            tree_instance:render()
+                            
+                            local render_ok, render_err = pcall(function()
+                                tree_instance:set_nodes(nodes)
+                                tree_instance:render()
+                            end)
+                            
+                            if not render_ok then
+                                log_error("Render failed: " .. tostring(render_err))
+                            else
+                                log_debug("Render complete")
+                            end
                             
                             if target_winid and vim.api.nvim_win_is_valid(target_winid) then
                                 local icon = "󰌗"
@@ -686,7 +692,7 @@ function M.update(tree_instance, target_winid, opts)
                             if last_state.class_name == filename then
                                  last_state.cancel_func = nil
                             end
-                         end)
+                        end)
                     end
                 end)
 
@@ -723,17 +729,17 @@ function M.on_node_action(tree_instance, split_instance, other_split_instance)
         if node:is_expanded() then node:collapse() else node:expand() end
         tree_instance:render()
     elseif node.line then
-        local wins = vim.api.nvim_list_wins()
-        for _, w in ipairs(wins) do
-            if w ~= split_instance.winid and (not other_split_instance or w ~= other_split_instance.winid) then
-                vim.api.nvim_set_current_win(w)
-                if node.file_path then
-                    vim.cmd("edit " .. vim.fn.fnameescape(node.file_path))
-                end
-                vim.api.nvim_win_set_cursor(w, { node.line, 0 })
-                vim.cmd("normal! zz")
-                break
-            end
+        if node.file_path then
+             -- ★修正: UNL.buf.open.safe を使用してファイルを開く
+             unl_open.safe({
+                file_path = node.file_path,
+                open_cmd = "edit",
+                plugin_name = "UNX",
+                split_cmd = "vertical botright split", -- ★これ追加
+            })
+            -- ジャンプ
+            vim.api.nvim_win_set_cursor(0, { node.line, 0 })
+            vim.cmd("normal! zz")
         end
     end
 end
