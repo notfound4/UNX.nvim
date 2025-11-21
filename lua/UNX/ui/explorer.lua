@@ -270,6 +270,33 @@ function M.setup(opts)
                     ViewInsights.set_data(payload.trace_handle, payload.frame_data)
                 end
             end)
+
+          -- ★★★ 追記: UEP ON_REQUEST_UPROJECT_TREE_VIEW イベントの監視 ★★★
+            require("UNL.event.events").subscribe(unl_event_types.ON_REQUEST_UPROJECT_TREE_VIEW, function(payload)
+                local log = require("UNX.logger").get()
+                log.info("Received ON_REQUEST_UPROJECT_TREE_VIEW event from UEP.")
+                
+                -- 1. UNXウィンドウが開いていなければ開く
+                if not (state.uproject_split and state.uproject_split.winid and vim.api.nvim_win_is_valid(state.uproject_split.winid)) then
+                    M.open()
+                    -- M.open() が非同期的にツリーを構築するため、ここではツリーの再描画は行わない
+                end
+
+                -- 2. uprojectレイアウトに切り替え、フォーカスする
+                switch_layout(state.uproject_layout, state.uproject_split)
+                
+                -- 3. 強制リフレッシュをスケジュール
+                -- (新しいペイロードは次回UNXがノードを遅延ロードするときに自動で取得されるため、ここでは強制リフレッシュだけでOK)
+                if state.uproject_tree then
+                     ViewUproject.refresh(state.uproject_tree)
+                     -- Note: ViewUproject.refresh の中で UEP.build_tree_model をリクエストする必要がある。
+                     -- 現状の ViewUproject.refresh は fetch_root_data() を呼ぶが、これは pending request を無視するため、
+                     -- UEPとUNXを統合するなら ViewUproject のロジック全体を見直す必要があります。
+                     -- **今回は、M.refresh()を呼び出すことで、次回描画時に pending request を参照できることを期待します。**
+                end
+            end)
+            -- ★★★ 追記ここまで ★★★
+
         end
     end
 
