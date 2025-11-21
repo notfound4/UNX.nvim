@@ -30,6 +30,13 @@ local active_tree = nil
 local tree_winid = nil
 local render_timer = nil
 
+function M.cancel_async_tasks()
+    if render_timer then
+        render_timer:stop()
+        if not render_timer:is_closing() then render_timer:close() end
+        render_timer = nil
+    end
+end
 -- ======================================================
 -- HELPER FUNCTIONS
 -- ======================================================
@@ -37,6 +44,11 @@ local render_timer = nil
 -- 安全な再描画（デバウンス付き）
 local function schedule_render()
     if not active_tree then return end
+    -- ★修正: active_tree のバッファが有効なバッファかチェック
+    if not vim.api.nvim_buf_is_valid(active_tree.bufnr) then
+        return
+    end
+
     if render_timer then
         render_timer:stop()
         if not render_timer:is_closing() then render_timer:close() end
