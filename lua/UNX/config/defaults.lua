@@ -57,23 +57,22 @@ M.defaults = {
             },
         },
     },
-    -- ★追加: Safe Open 設定
+    -- Safe Open 設定
     safe_open = {
-        -- 開くのを避けるバッファタイプ
         prevent_in_buftypes = {
+            "nofile",
             "quickfix",
             "help",
             "terminal",
             "prompt",
         },
-        -- 開くのを避けるファイルタイプ
         prevent_in_filetypes = {
             "neo-tree",
             "NvimTree",
             "TelescopePrompt",
             "fugitive",
             "lazy",
-            "unx-explorer", -- UNX自身のバッファでも開かないようにする
+            "unx-explorer",
         },
     },
     keymaps = {
@@ -83,6 +82,7 @@ M.defaults = {
         split = "i",
         
         action_add = "a",
+        action_add_directory = "A", -- ★追加
         action_delete = "d",
         action_move = "m",
         action_rename = "r",

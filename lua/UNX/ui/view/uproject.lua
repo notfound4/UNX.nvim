@@ -381,6 +381,10 @@ function M.create(bufnr, winid)
     if keys.action_add then
         vim.keymap.set("n", keys.action_add, function() file_actions.add(active_tree) end, map_opts)
     end
+    -- ★追加: ディレクトリ追加 [A]
+    if keys.action_add_directory then
+        vim.keymap.set("n", keys.action_add_directory, function() file_actions.add_directory(active_tree) end, map_opts)
+    end
     if keys.action_delete then
         vim.keymap.set("n", keys.action_delete, function() file_actions.delete(active_tree) end, map_opts)
     end
@@ -419,7 +423,7 @@ function M.on_node_action(tree_instance, split_instance, other_split_instance)
         tree_instance:render()
     else
         if node.path then
-             -- ★修正: vertical botright split で開く
+             -- ★修正: node.line がないのでジャンプ処理を削除
              unl_open.safe({
                 file_path = node.path,
                 open_cmd = "edit",
