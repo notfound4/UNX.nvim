@@ -28,6 +28,8 @@ local state = {
     class_func_tree = nil,
     insights_tree = nil,
     augroup = vim.api.nvim_create_augroup("UNX_Explorer", { clear = true }),
+
+    is_switching_tab = false,
 }
 
 -- ======================================================
@@ -117,37 +119,55 @@ local function map_mouse_action_dclick(split)
     
     -- Quit keymap (省略)
     for _, key in ipairs(config.keymaps.close or {"q"}) do
-        uproject_split:map("n", key, function() state.current_layout:unmount() end, { noremap = true })
-        class_func_split:map("n", key, function() state.current_layout:unmount() end, { noremap = true })
-        insights_split:map("n", key, function() state.current_layout:unmount() end, { noremap = true })
+        -- ★修正: state.current_layout:unmount() ではなく M.close() を呼ぶ
+        uproject_split:map("n", key, function() M.close() end, { noremap = true })
+        class_func_split:map("n", key, function() M.close() end, { noremap = true })
+        insights_split:map("n", key, function() M.close() end, { noremap = true })
     end
 end
 
 
 local function update_winbars(active_layout)
-    local tab_uproject_active = "%#UNXGitAdded# uproject %#UNXGitModified# | "
-    local tab_uproject_inactive = "%#UNXGitIgnored# uproject | "
-    local tab_insights_active = "%#UNXGitAdded# insights"
-    local tab_insights_inactive = "%#UNXGitIgnored# insights"
-    
+    -- 1. ハイライトコードの定義
+    local hl_active   = "%#UNXTabActive#"
+    local hl_inactive = "%#UNXTabInactive#"
+    local hl_sep      = "%#UNXTabSeparator#" -- ★セパレーター用
+
+    -- 2. 表示テキストの定義
+    local text_uproject = " uproject"
+    local text_insights = " insights"
+    local text_sep      = " | " -- ★セパレーターの文字
+
+    -- 3. 左側のアイコン/プレフィックス定義
+    -- uproject_prefix は現状空ですが、将来のために残しています
     local uproject_prefix = "" 
     local symbols_prefix = "%#UNXGitFunction# 󰌗 Class/Function " 
     local insights_prefix = ""
 
+    -- 4. 現在のバッファ名取得（Class/Function側で使用）
     local buf_name = vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf())
-    
-    -- 正しい関数名 vim.fn.fnamemodify を使用
     local filename = vim.fn.fnamemodify(buf_name, ":t:r") 
 
+    -- 5. 文字列の組み立て
     if active_layout == state.uproject_layout then
-        local up_bar = uproject_prefix .. tab_uproject_active .. tab_insights_inactive
+        -- [Active] uproject [Sep] | [Inactive] insights
+        local up_bar = uproject_prefix .. 
+                       hl_active .. text_uproject .. 
+                       hl_sep .. text_sep .. 
+                       hl_inactive .. text_insights
+        
         pcall(vim.api.nvim_win_set_option, state.uproject_split.winid, "winbar", up_bar)
         
         local sym_bar = symbols_prefix .. filename
         pcall(vim.api.nvim_win_set_option, state.class_func_split.winid, "winbar", sym_bar)
         
     elseif active_layout == state.insights_layout then
-        local insight_bar = insights_prefix .. tab_uproject_inactive .. tab_insights_active
+        -- [Inactive] uproject [Sep] | [Active] insights
+        local insight_bar = insights_prefix .. 
+                            hl_inactive .. text_uproject .. 
+                            hl_sep .. text_sep .. 
+                            hl_active .. text_insights
+                            
         pcall(vim.api.nvim_win_set_option, state.insights_split.winid, "winbar", insight_bar)
     end
 end
@@ -209,6 +229,8 @@ end
 switch_layout = function(new_layout, target_split)
     if state.current_layout == new_layout then return end
 
+    state.is_switching_tab = true
+
     -- 1. 現在のアクティブなレイアウトを隠す
     if state.current_layout then
         if state.current_layout == state.uproject_layout then
@@ -240,9 +262,32 @@ switch_layout = function(new_layout, target_split)
     end
     
     -- ★重要: キーマップの再適用ロジックは不要になるはずです（インスタンスが生きているため）
+  
+    state.is_switching_tab = false
 end
 
-
+function M.close()
+    -- 既に閉じている、または処理中の場合はスキップ
+    if not state.current_layout then return end
+    
+    -- 再帰呼び出し防止のためのフラグ管理などを考慮し、
+    -- ここでは単純に unmount を呼びます。
+    -- nui.layout.unmount はウィンドウが既に閉じていてもエラーになりにくいですが念の為 pcall
+    pcall(function() 
+        state.current_layout:unmount() 
+    end)
+    
+    -- 状態のリセット
+    state.current_layout = nil
+    state.uproject_layout = nil
+    state.insights_layout = nil
+    state.uproject_split = nil
+    state.class_func_split = nil
+    state.insights_split = nil
+    
+    -- uprojectの非同期タスク停止
+    ViewUproject.cancel_async_tasks()
+end
 -- ======================================================
 -- PUBLIC API (SETUP & OPEN)
 -- ======================================================
@@ -374,7 +419,31 @@ function M.open()
     if vim.fn.has("nvim-0.8") == 1 then
         update_winbars(state.uproject_layout)
     end
+-- ★★★ 追加: いずれかのウィンドウが閉じられたら全体を閉じる処理 ★★★
+local function set_close_autocmd(split)
+        if not split or not split.winid then return end
+        
+        vim.api.nvim_create_autocmd("WinClosed", {
+            pattern = tostring(split.winid),
+            group = state.augroup,
+            once = true,
+            callback = function()
+                -- ★追加: タブ切り替え中なら、終了処理をスキップしてreturnする
+                if state.is_switching_tab then
+                    return
+                end
 
+                vim.schedule(function()
+                    M.close()
+                end)
+            end,
+        })
+    end
+
+    set_close_autocmd(state.uproject_split)
+    set_close_autocmd(state.class_func_split)
+    set_close_autocmd(state.insights_split)
+    -- ★★★ 追加ここまで ★★★
     -- Treeインスタンスの作成
     state.uproject_tree = ViewUproject.create(state.uproject_split.bufnr, state.uproject_split.winid)
     state.class_func_tree = ViewSymbols.create(state.class_func_split.bufnr)

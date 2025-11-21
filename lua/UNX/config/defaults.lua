@@ -22,7 +22,12 @@ M.defaults = {
         UNXFileName      = { link = "Normal" },
         UNXIndentMarker  = { link = "NonText" },
         UNXModifiedIcon  = { link = "Special" },
-        
+
+        UNXTabActive     = { link = "UNXGitAdded" }, 
+        UNXTabInactive   = { link = "Normal" },
+
+        UNXTabSeparator  = { link = "NonText" },
+
         UNXGitModified   = { link = "Special" },
         UNXGitAdded      = { link = "String" },
         UNXGitDeleted    = { link = "Error" },

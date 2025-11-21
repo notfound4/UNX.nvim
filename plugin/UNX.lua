@@ -22,7 +22,7 @@ local subcommands = {
     close = {
         desc = "Close the explorer window",
         handler = function(args) -- 修正: impl -> handler
-            vim.notify("UNX: Close not implemented yet", vim.log.levels.INFO)
+          require("UNX.ui.explorer").close()
         end,
     }
 }

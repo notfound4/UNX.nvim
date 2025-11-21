@@ -44,7 +44,7 @@ end
 -- 安全な再描画（デバウンス付き）
 local function schedule_render()
     if not active_tree then return end
-    -- ★修正: active_tree のバッファが有効なバッファかチェック
+    -- 呼び出し時点でのチェック
     if not vim.api.nvim_buf_is_valid(active_tree.bufnr) then
         return
     end
@@ -59,7 +59,11 @@ local function schedule_render()
             if not render_timer:is_closing() then render_timer:close() end
             render_timer = nil
         end
-        if active_tree then active_tree:render() end
+        
+        -- ★修正: タイマー発火時にもバッファが有効か再チェックする
+        if active_tree and vim.api.nvim_buf_is_valid(active_tree.bufnr) then 
+            active_tree:render() 
+        end
     end))
 end
 
