@@ -153,28 +153,15 @@ local function fetch_root_data()
         end
     end
 
-    last_context.mode = "normal"
-    last_context.project_root = cwd
-    
-    unx_git.refresh(cwd, function() 
-        schedule_render()
+-- UEPが見つからなかった場合の処理
+    vim.schedule(function()
+        vim.notify("[UNX] Unreal Engine project (.uproject) not found.", vim.log.levels.INFO)
     end)
-
-    local root_children = scan_directory(cwd)
-    local nui_children = {}
-    for _, item in ipairs(root_children) do
-        table.insert(nui_children, Tree.Node(item))
-    end
     
-    local root_node = Tree.Node({
-        text = vim.fn.fnamemodify(cwd, ":t") .. " (File System)",
-        id = utils.normalize_path(cwd),
-        path = cwd,
-        type = "directory",
-    }, nui_children)
-    root_node:expand()
-
-    return { root_node }
+    last_context.mode = "none" -- 新しいモードを追加 (または単に nil)
+    last_context.project_root = nil
+    
+    return {} -- 空のノui_nodesを返して、ツリーを空にする
 end
 
 local function lazy_load_children(tree_instance, parent_node)
