@@ -137,7 +137,7 @@ local function fetch_root_data()
         ctx.project_root = project_info.root
 
 
-    print(conf.engine_path)
+    -- print(conf.engine_path)
         
         local engine_root = unl_finder.engine.find_engine_root(project_info.uproject, {
             engine_override_path = conf.engine_path 
