@@ -327,7 +327,7 @@ function M.open()
     local saved_tab = get_current_tab()
     switch_layout(saved_tab)
 
-    ViewUproject.refresh(ui.uproject_tree)
+  ViewUproject.refresh(ui.uproject_tree, ui.win_main)
 end
 
 function M.close()

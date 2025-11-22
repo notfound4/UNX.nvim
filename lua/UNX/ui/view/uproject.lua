@@ -422,8 +422,12 @@ function M.create(bufnr, winid)
     return active_tree
 end
 
-function M.refresh(tree_instance)
+function M.refresh(tree_instance, winid) -- ★変更: winid 引数を追加
     if tree_instance then
+        if winid and vim.api.nvim_win_is_valid(winid) then
+            tree_winid = winid
+        end
+
         local new_nodes = fetch_root_data()
         tree_instance:set_nodes(new_nodes)
         tree_instance:render()
