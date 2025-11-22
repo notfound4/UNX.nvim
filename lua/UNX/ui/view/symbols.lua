@@ -11,7 +11,6 @@ local unl_open = require("UNL.buf.open")
 local ctx_symbols = require("UNX.context.symbols")
 
 local M = {}
-local config = {}
 
 -- ★変更: 状態管理の分離
 -- 1. UI/Runtime状態 (保存しない・再起動でリセットされるもの)
@@ -561,8 +560,7 @@ local function prepare_node(node)
     return line
 end
 
-function M.setup(user_config)
-    config = user_config
+function M.setup()
 end
 
 function M.create(bufnr)

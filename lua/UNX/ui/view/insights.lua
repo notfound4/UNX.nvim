@@ -6,7 +6,6 @@ local Line = require("nui.line")
 local ctx_insights = require("UNX.context.insights")
 
 local M = {}
-local config = {}
 
 -- ★変更: 状態管理の分離
 -- Runtime State (再起動で消えてよい、または巨大すぎて保存に適さないデータ)
@@ -19,13 +18,14 @@ local runtime_state = {
 }
 
 local function prepare_node(node)
+    local conf = require("UNX.config").get() -- ★修正: 設定を動的に取得
     local line = Line()
     line:append(string.rep("  ", node:get_depth() - 1))
     
     -- 子を持つかどうか
     local has_children = node:has_children() or (node.children and #node.children > 0)
     
-    local ui_config = config.insights_ui or {}
+    local ui_config = conf.insights_ui or {}
     local icon_config = ui_config.icon or {}
     
     local default_open = ""      
@@ -106,8 +106,7 @@ local function convert_events_to_nodes(events, parent_id)
     return nodes
 end
 
-function M.setup(user_config)
-    config = user_config
+function M.setup()
 end
 
 function M.create(bufnr)

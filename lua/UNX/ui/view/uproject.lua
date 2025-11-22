@@ -26,7 +26,6 @@ local unl_types_ok, unl_event_types = pcall(require, "UNL.event.types")
 local has_devicons, devicons = pcall(require, "nvim-web-devicons")
 
 local M = {}
-local config = {}
 
 -- UIランタイムオブジェクト (これらは保存しないのでローカル変数のまま)
 local active_tree = nil
@@ -124,6 +123,8 @@ local function convert_uep_to_nui(uep_node)
 end
 
 local function fetch_root_data()
+
+    local conf = require("UNX.config").get() -- ★修正: 設定を動的に取得
     local cwd = vim.loop.cwd()
     local project_info = unl_finder.project.find_project(cwd)
     
@@ -134,9 +135,12 @@ local function fetch_root_data()
         -- ★ データ更新
         ctx.mode = "uep"
         ctx.project_root = project_info.root
+
+
+    print(conf.engine_path)
         
         local engine_root = unl_finder.engine.find_engine_root(project_info.uproject, {
-            engine_override_path = config.engine_path 
+            engine_override_path = conf.engine_path 
         })
         ctx.engine_root = engine_root
         
@@ -231,21 +235,22 @@ local COMPONENTS = {
 -- ======================================================
 
 local function prepare_node(node)
+    local conf = require("UNX.config").get() -- ★修正: 設定を動的に取得
     local line = Line()
     
     line:append(string.rep("  ", node:get_depth() - 1))
 
     local has_children = node:has_children() or node._has_children
     if has_children then
-        local exp_open = config.uproject.icon.expander_open or ""
-        local exp_closed = config.uproject.icon.expander_closed or ""
+        local exp_open = conf.uproject.icon.expander_open or ""
+        local exp_closed = conf.uproject.icon.expander_closed or ""
         local icon = node:is_expanded() and exp_open or exp_closed
         line:append(icon .. " ", "UNXIndentMarker") 
     else
         line:append("  ", "UNXIndentMarker")
     end
 
-    local icon_text = config.uproject.icon.default_file or " "
+    local icon_text = conf.uproject.icon.default_file or " "
     local icon_hl = "UNXFileIcon"
 
     local uep_type = node.extra and node.extra.uep_type
@@ -254,8 +259,8 @@ local function prepare_node(node)
                            (uep_type == "module_root")
 
     if is_folder_like then
-        local f_open = config.uproject.icon.folder_open or ""
-        local f_close = config.uproject.icon.folder_closed or ""
+        local f_open = conf.uproject.icon.folder_open or ""
+        local f_close = conf.uproject.icon.folder_closed or ""
         icon_text = node:is_expanded() and f_open or f_close
         icon_hl = "UNXDirectoryIcon"
         
@@ -276,12 +281,12 @@ local function prepare_node(node)
 
     local right_components_data = {}
     local right_width = 0
-    local component_keys = config.uproject.ui and config.uproject.ui.right_components or {}
+    local component_keys = conf.uproject.ui and conf.uproject.ui.right_components or {}
     
     for _, comp_key in ipairs(component_keys) do
         local comp_fn = COMPONENTS[comp_key]
         if comp_fn then
-            local res = comp_fn(node, {}, config)
+            local res = comp_fn(node, {}, conf)
             if res then
                 if right_width > 0 then
                     table.insert(right_components_data, { text = " ", highlight = "Normal" })
@@ -302,7 +307,7 @@ local function prepare_node(node)
     
     local name_hl = "UNXFileName"
     if vcs_stat then 
-        _, name_hl = utils.get_vcs_icon_and_hl(vcs_stat, config)
+        _, name_hl = utils.get_vcs_icon_and_hl(vcs_stat, conf)
     end
 
     local display_text = node.text
@@ -347,8 +352,7 @@ end
 -- PUBLIC API
 -- ======================================================
 
-function M.setup(user_config)
-    config = user_config
+function M.setup()
     
     vim.api.nvim_create_autocmd({ "BufWritePost", "FileChangedShellPost", "FocusGained", "DirChanged" }, {
         callback = function()
@@ -388,6 +392,7 @@ function M.setup(user_config)
 end
 
 function M.create(bufnr, winid)
+    local conf = require("UNX.config").get() -- ★修正: 設定を動的に取得
     tree_winid = winid
     active_tree = Tree({
         bufnr = bufnr,
@@ -396,7 +401,7 @@ function M.create(bufnr, winid)
     })
 
     local map_opts = { buffer = bufnr, noremap = true, silent = true }
-    local keys = config.keymaps or {}
+    local keys = conf.keymaps or {}
     
     if keys.action_add then
         vim.keymap.set("n", keys.action_add, function() file_actions.add(active_tree) end, map_opts)

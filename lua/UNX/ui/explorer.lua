@@ -9,7 +9,6 @@ local ViewInsights = require("UNX.ui.view.insights")
 local ctx_explorer = require("UNX.context.explorer")
 
 local M = {}
-local config = {}
 
 local switch_layout 
 local handle_tab_switch_click 
@@ -122,12 +121,15 @@ local function apply_buffer_keymaps(bufnr)
         do_action()
     end, opts)
 
-    local keys = config.keymaps.open or {"<CR>", "o"}
+    local conf = require("UNX.config").get() -- ★修正: 設定を動的に取得
+
+
+    local keys = conf.keymaps.open or {"<CR>", "o"}
     for _, key in ipairs(keys) do
         vim.keymap.set("n", key, do_action, opts)
     end
 
-    local close_keys = config.keymaps.close or {"q"}
+    local close_keys = conf.keymaps.close or {"q"}
     for _, key in ipairs(close_keys) do
         vim.keymap.set("n", key, function() M.close() end, opts)
     end
@@ -233,11 +235,10 @@ end
 -- ======================================================
 
 function M.setup(opts)
-    config = opts or {}
-    
-    ViewUproject.setup(config)
-    ViewSymbols.setup(config)
-    ViewInsights.setup(config)
+    opts = opts or {}
+    ViewUproject.setup()
+    ViewSymbols.setup()
+    ViewInsights.setup()
 
     local unl_api_ok, unl_api = pcall(require, "UNL.api")
     if unl_api_ok then
@@ -301,9 +302,11 @@ function M.open()
     apply_buffer_keymaps(ui.buf_uproject)
     apply_buffer_keymaps(ui.buf_symbols)
     apply_buffer_keymaps(ui.buf_insights)
+    
+    local conf = require("UNX.config").get() -- ★修正: 設定を動的に取得
 
-    local width = config.window and config.window.size and config.window.size.width or 35
-    local pos = config.window and config.window.position or "left"
+    local width = conf.window and conf.window.size and conf.window.size.width or 35
+    local pos = conf.window and conf.window.position or "left"
     local modifier = (pos == "right" and "botright" or "topleft")
     
     vim.cmd(modifier .. " vsplit")
