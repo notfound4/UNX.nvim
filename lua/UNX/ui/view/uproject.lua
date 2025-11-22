@@ -4,16 +4,18 @@ local Tree = require("nui.tree")
 local Line = require("nui.line")
 local unl_api = require("UNL.api")
 local unl_finder = require("UNL.finder")
-local unx_git = require("UNX.git")
 local fs = require("vim.fs")
 local utils = require("UNX.common.utils")
 local file_actions = require("UNX.ui.view.action.files")
 local unl_open = require("UNL.buf.open")
 
--- ★追加: UNL.path を読み込む
+-- ★変更: UNL.path を読み込む
 local unl_path = require("UNL.path")
 
--- ★追加: コンテキスト
+-- ★変更: VCSモジュールを使用 (Git/P4共通)
+local unx_vcs = require("UNX.vcs")
+
+-- ★変更: コンテキスト
 local ctx_uproject = require("UNX.context.uproject")
 
 -- UNL Events
@@ -141,7 +143,8 @@ local function fetch_root_data()
         -- ★ 保存
         ctx_uproject.set(ctx)
 
-        unx_git.refresh(project_info.root, function() 
+        -- ★変更: unx_vcs を使用
+        unx_vcs.refresh(project_info.root, function() 
             schedule_render()
         end)
 
@@ -216,8 +219,10 @@ end
 -- COMPONENT LOADERS
 -- ======================================================
 
+-- ★変更: VCSコンポーネントの読み込み
 local COMPONENTS = {
-    git_status = require("UNX.ui.view.component.git"),
+    -- 新しい名前と古い名前の両方でアクセス可能にする
+    vcs_status = require("UNX.ui.view.component.vcs"),
     modified_buffer = require("UNX.ui.view.component.modified"),
 }
 
@@ -292,12 +297,12 @@ local function prepare_node(node)
     -- ★修正: unl_path.normalize を使用
     local norm_path = unl_path.normalize(path)
     
-    -- Gitステータス取得
-    local git_stat = unx_git.get_status(norm_path)
+    -- ★修正: unx_vcs を使用してステータス取得
+    local vcs_stat = unx_vcs.get_status(norm_path)
     
     local name_hl = "UNXFileName"
-    if git_stat then 
-        _, name_hl = utils.get_git_icon_and_hl(git_stat, config)
+    if vcs_stat then 
+        _, name_hl = utils.get_vcs_icon_and_hl(vcs_stat, config)
     end
 
     local display_text = node.text
@@ -350,7 +355,8 @@ function M.setup(user_config)
             -- ★ Context取得
             local ctx = ctx_uproject.get()
             if active_tree and ctx.project_root then
-                unx_git.refresh(ctx.project_root, function()
+                -- ★修正: unx_vcs.refresh を使用
+                unx_vcs.refresh(ctx.project_root, function()
                     schedule_render()
                 end)
             end

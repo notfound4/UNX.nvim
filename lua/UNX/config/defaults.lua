@@ -10,10 +10,10 @@ M.defaults = {
     },
     cache = { dirname = "UNX" },
     logging = {
-        level = "info",
+        level = "debug",
         echo = { level = "warn" },
         notify = { level = "error", prefix = "[UNX]" },
-        file = { level = "debug", enable = true, max_kb = 512, rotate = 3, filename = "unx.log" },
+        file = { level = "trace", enable = true, max_kb = 512, rotate = 3, filename = "unx.log" },
         perf = { enabled = false, patterns = { "^refresh" }, level = "trace" },
     },
     highlights = {
@@ -46,7 +46,7 @@ M.defaults = {
             default_file    = "",
             modified        = "[+] ", 
         },
-        git_icons = {
+        vcs_icons = {
             Modified  = "",
             Added     = "✚",
             Deleted   = "✖",
@@ -57,7 +57,7 @@ M.defaults = {
         },
         ui = {
             right_components = {
-                "git_status",
+                "vcs_status",
                 "modified_buffer",
             },
         },

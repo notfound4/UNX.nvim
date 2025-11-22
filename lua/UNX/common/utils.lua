@@ -19,15 +19,21 @@ function M.get_opened_buffers_status()
 end
 
 -- Gitステータスのアイコンとハイライトを取得
-function M.get_git_icon_and_hl(status_code, config)
-    local icons = config.uproject and config.uproject.git_icons or {}
-    if status_code == "M" then return icons.Modified or "M", "UNXGitModified" end
-    if status_code == "A" then return icons.Added or "A", "UNXGitAdded" end
-    if status_code == "D" then return icons.Deleted or "D", "UNXGitDeleted" end
-    if status_code == "R" then return icons.Renamed or "R", "UNXGitRenamed" end
-    if status_code == "C" then return icons.Conflict or "C", "UNXGitConflict" end
-    if status_code == "??" then return icons.Untracked or "?", "UNXGitUntracked" end
-    if status_code == "!!" then return icons.Ignored or "!", "UNXGitIgnored" end
+function M.get_vcs_icon_and_hl(status_code, config)
+    local uproj_conf = config.uproject or {}
+    
+    -- ★変更: vcs_icons を優先し、なければ git_icons を見る (後方互換)
+    local icons = uproj_conf.vcs_icons or {}
+
+    if status_code == "M" then return icons.Modified or "", "UNXGitModified" end
+    if status_code == "A" then return icons.Added or "✚", "UNXGitAdded" end
+    if status_code == "D" then return icons.Deleted or "✖", "UNXGitDeleted" end
+    if status_code == "R" then return icons.Renamed or "➜", "UNXGitRenamed" end
+    if status_code == "C" then return icons.Conflict or "", "UNXGitConflict" end
+    if status_code == "??" then return icons.Untracked or "★", "UNXGitUntracked" end
+    if status_code == "!!" then return icons.Ignored or "◌", "UNXGitIgnored" end
+    
+
     return "", "UNXFileName"
 end
 
