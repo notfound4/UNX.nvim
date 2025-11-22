@@ -3,12 +3,9 @@
 local Tree = require("nui.tree")
 local Line = require("nui.line")
 
--- Viewモジュール
 local ViewUproject = require("UNX.ui.view.uproject")
 local ViewSymbols = require("UNX.ui.view.symbols")
 local ViewInsights = require("UNX.ui.view.insights")
-
--- コンテキスト (設定データの保存用)
 local ctx_explorer = require("UNX.context.explorer")
 
 local M = {}
@@ -17,8 +14,10 @@ local config = {}
 local switch_layout 
 local handle_tab_switch_click 
 
--- ★【重要】UIオブジェクトはローカル変数で管理する (Contextには入れない)
--- これらは関数を含むオブジェクトや、再起動で無効になるIDなので保存できません。
+-- プログラムによるウィンドウ操作中かどうかを判定するフラグ
+local ignore_win_close_event = false
+
+-- UIオブジェクト管理
 local ui = {
     buf_uproject = nil,
     buf_symbols = nil,
@@ -34,7 +33,6 @@ local ui = {
 -- HELPER: Context Access
 -- ======================================================
 
--- 現在のタブ情報だけは Context (保存データ) から取得・保存する
 local function get_current_tab()
     local state = ctx_explorer.get()
     return state.current_tab or "uproject"
@@ -88,14 +86,14 @@ local function apply_buffer_keymaps(bufnr)
 
     local opts = { noremap = true, silent = true, buffer = bufnr }
 
-    -- 1. Tab切り替え
+    -- Tab切り替え
     vim.keymap.set("n", "<Tab>", function()
         local current = get_current_tab()
         local target = (current == "uproject") and "insights" or "uproject"
         switch_layout(target)
     end, opts)
 
-    -- 2. マウスクリック
+    -- マウスクリック
     vim.keymap.set("n", "<LeftMouse>", function()
         local winid = vim.api.nvim_get_current_win()
         local mouse_line = vim.fn.getmousepos().line
@@ -104,7 +102,7 @@ local function apply_buffer_keymaps(bufnr)
         end
     end, opts)
     
-    -- 3. アクション (Double Click / Enter)
+    -- アクション
     local function do_action()
         if bufnr == ui.buf_uproject then
             ViewUproject.on_node_action(ui.uproject_tree, nil, nil)
@@ -175,7 +173,7 @@ switch_layout = function(target_tab)
 
     if not ui.win_main or not vim.api.nvim_win_is_valid(ui.win_main) then return end
 
-if target_tab == "uproject" then
+    if target_tab == "uproject" then
         vim.api.nvim_win_set_buf(ui.win_main, ui.buf_uproject)
         
         if not ui.win_sub or not vim.api.nvim_win_is_valid(ui.win_sub) then
@@ -192,10 +190,8 @@ if target_tab == "uproject" then
             vim.api.nvim_set_current_win(ui.win_main)
         end
         
-        -- ★修正: ウィンドウ作成に失敗していないか確認してからバッファをセット
         if ui.win_sub and vim.api.nvim_win_is_valid(ui.win_sub) then
             vim.api.nvim_win_set_buf(ui.win_sub, ui.buf_symbols)
-            
             if vim.bo.filetype:match("cpp") then
                  ViewSymbols.update(ui.class_func_tree, ui.win_sub, { force = true })
             end
@@ -205,7 +201,9 @@ if target_tab == "uproject" then
         vim.api.nvim_win_set_buf(ui.win_main, ui.buf_insights)
         
         if ui.win_sub and vim.api.nvim_win_is_valid(ui.win_sub) then
+            ignore_win_close_event = true 
             pcall(vim.api.nvim_win_close, ui.win_sub, true)
+            ignore_win_close_event = false 
             ui.win_sub = nil
         end
         
@@ -220,11 +218,9 @@ handle_tab_switch_click = function(winid)
     local mouse = vim.fn.getmousepos()
     local col = mouse.wincol
     if not col then return end
-    
     local strwidth = vim.fn.strdisplaywidth
     local up_w = strwidth(" uproject ")
     local sep_w = strwidth(" | ")
-    
     if col < up_w + 5 then
         switch_layout("uproject")
     elseif col > up_w + sep_w then
@@ -254,7 +250,6 @@ function M.setup(opts)
                     ViewInsights.set_data(payload.trace_handle, payload.frame_data)
                 end
             end)
-
             require("UNL.event.events").subscribe(unl_event_types.ON_REQUEST_UPROJECT_TREE_VIEW, function(payload)
                 if not M.is_open() then M.open() end
                 switch_layout("uproject")
@@ -276,6 +271,21 @@ function M.setup(opts)
             end
         end,
     })
+
+    -- ★修正: vim.schedule を削除し、即座に閉じるように変更
+    vim.api.nvim_create_autocmd("WinClosed", {
+        group = vim.api.nvim_create_augroup("UNX_AutoClose", { clear = true }),
+        callback = function(args)
+            if ignore_win_close_event then return end
+            
+            local closed_win = tonumber(args.match)
+            
+            if closed_win == ui.win_main or closed_win == ui.win_sub then
+                -- scheduleを通さず、直接呼び出すことでラグやコンテキスト落ちを防ぐ
+                M.close()
+            end
+        end
+    })
 end
 
 function M.open()
@@ -284,7 +294,6 @@ function M.open()
         return
     end
 
-    -- 1. バッファの準備
     ui.buf_uproject = get_or_create_buffer("buf_uproject")
     ui.buf_symbols  = get_or_create_buffer("buf_symbols")
     ui.buf_insights = get_or_create_buffer("buf_insights")
@@ -293,7 +302,6 @@ function M.open()
     apply_buffer_keymaps(ui.buf_symbols)
     apply_buffer_keymaps(ui.buf_insights)
 
-    -- 2. ウィンドウ作成
     local width = config.window and config.window.size and config.window.size.width or 35
     local pos = config.window and config.window.position or "left"
     local modifier = (pos == "right" and "botright" or "topleft")
@@ -303,7 +311,6 @@ function M.open()
     vim.api.nvim_win_set_width(ui.win_main, width)
     apply_window_options(ui.win_main)
     
-    -- 3. Treeの初期化
     if not ui.uproject_tree then
         ui.uproject_tree = ViewUproject.create(ui.buf_uproject, ui.win_main)
     end
@@ -314,18 +321,15 @@ function M.open()
         ui.insights_tree = ViewInsights.create(ui.buf_insights)
     end
 
-    -- 4. レイアウト適用 (Contextから前回のタブ設定を読み込む)
     local saved_tab = get_current_tab()
-    -- 強制的にレイアウト処理を走らせるため、一時的にnilセットなどは不要。
-    -- switch_layout内の current check で弾かれないよう注意するが、
-    -- 初期状態のUIは空なので問題ない。
     switch_layout(saved_tab)
 
-    -- 5. データ描画
     ViewUproject.refresh(ui.uproject_tree)
 end
 
 function M.close()
+    ignore_win_close_event = true
+    
     local wins = { ui.win_main, ui.win_sub }
     for _, winid in ipairs(wins) do
         if winid and vim.api.nvim_win_is_valid(winid) then
@@ -335,6 +339,8 @@ function M.close()
     
     ui.win_main = nil
     ui.win_sub = nil
+    
+    ignore_win_close_event = false
     
     ViewUproject.cancel_async_tasks()
 end
