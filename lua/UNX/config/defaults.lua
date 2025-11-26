@@ -10,10 +10,10 @@ M.defaults = {
     },
     cache = { dirname = "UNX" },
     logging = {
-        level = "debug",
+        level = "info",
         echo = { level = "warn" },
         notify = { level = "error", prefix = "[UNX]" },
-        file = { level = "trace", enable = true, max_kb = 512, rotate = 3, filename = "unx.log" },
+        file = { level = "info", enable = true, max_kb = 512, rotate = 3, filename = "unx.log" },
         perf = { enabled = false, patterns = { "^refresh" }, level = "trace" },
     },
     highlights = {
