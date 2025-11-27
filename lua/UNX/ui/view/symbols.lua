@@ -15,13 +15,12 @@ local runtime_state = {
     ticks = {},
     tree_ref = nil,
     cancel_func = nil,
-    ignore_next_update = false, -- ★追加: アクション経由の移動時に更新を無視するフラグ
+    ignore_next_update = false,
 }
 
 local debounce_timer = nil
 
 local function prepare_node(node)
-    -- (変更なし)
     local line = Line()
     line:append(string.rep("  ", node:get_depth() - 1))
     
@@ -44,6 +43,8 @@ local function prepare_node(node)
     elseif node.kind == "Implementation" then icon = " "; icon_hl = "Comment"; text_hl = "Comment"
     elseif node.kind == "Info" then icon = " "; icon_hl = "Comment"
     end
+    
+    -- ★BaseClassで未ロード(lazy_load)の場合はアイコンを変えても良いが、ここでは標準のままで進める
 
     line:append(icon, icon_hl)
     line:append(node.text, text_hl)
@@ -102,32 +103,23 @@ function M.update(tree_instance, target_winid, opts)
         local last_class_name = state.class_name
         local last_bufnr = state.last_bufnr
 
-        -- ★★★ 追加: アクションによる移動時の明示的なスキップ ★★★
         if runtime_state.ignore_next_update then
             runtime_state.ignore_next_update = false
-            
-            -- 移動先のバッファを「現在の状態」として記録しておく（次回のチェックのため）
             state.last_bufnr = current_buf_delayed
             ctx_symbols.set(state)
             runtime_state.ticks[current_buf_delayed] = current_tick
-            
             logger.get().trace("Skipping symbol tree update (Explicit ignore from action)")
             return
         end
-        -- ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
 
-        -- ヘッダー/ソース切り替え時の再描画防止ロジック
         if last_class_name == filename and last_bufnr ~= current_buf_delayed and not opts.force then
             state.last_bufnr = current_buf_delayed
             ctx_symbols.set(state)
-            
             runtime_state.ticks[current_buf_delayed] = current_tick
-            
             logger.get().trace("Skipping symbol tree update for context switch: " .. filename)
             return
         end
 
-        -- 既存のキャッシュ判定
         if not opts.force and last_class_name == filename 
            and runtime_state.ticks[current_buf_delayed] == current_tick 
            and runtime_state.tree_ref == tree_instance then
@@ -189,6 +181,8 @@ function M.update(tree_instance, target_winid, opts)
                             
                             if not render_ok then
                                 logger.get().error("Render failed: " .. tostring(render_err))
+                            else
+                                logger.get().debug("Render complete")
                             end
                             
                             if target_winid and vim.api.nvim_win_is_valid(target_winid) then
@@ -233,12 +227,38 @@ function M.on_node_action(tree_instance, split_instance, other_split_instance)
         return
     end
 
+    -- ★★★ 修正: 親クラス(BaseClass)の遅延読み込みハンドリング ★★★
+    if node.kind == "BaseClass" and node.lazy_load then
+        if node:is_expanded() then
+            node:collapse()
+        else
+            -- まだ読み込まれていない場合は解析して子ノードを追加
+            if not node:has_children() then
+                 logger.get().debug("Lazy loading base class: " .. node.text)
+                 
+                 -- 非同期で実行しても良いが、UI操作へのレスポンスなのでここでは同期的に解析を行う
+                 -- (ファイルサイズが巨大でなければ一瞬で終わるはず)
+                 local children = SymbolParser.parse_and_get_children(node.file_path, node.text)
+                 
+                 if children and #children > 0 then
+                     tree_instance:set_nodes(children, node:get_id())
+                     node.lazy_load = false -- 読み込み完了
+                 else
+                     vim.notify("No symbols found in base class.", vim.log.levels.INFO)
+                 end
+            end
+            node:expand()
+        end
+        tree_instance:render()
+        return
+    end
+    -- ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
+
     if node:has_children() then
         if node:is_expanded() then node:collapse() else node:expand() end
         tree_instance:render()
     elseif node.line then
         if node.file_path then
-             -- ★追加: アクション経由の移動なので、次のBufEnterによる更新を無視する
              runtime_state.ignore_next_update = true
              
              unl_open.safe({

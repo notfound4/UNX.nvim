@@ -3,13 +3,13 @@ local Query = require("UNX.ui.view.query")
 local IDRegistry = require("UNX.common.id_registry")
 local logger = require("UNX.logger")
 local Tree = require("nui.tree")
-local unl_path = require("UNL.path") -- unl_path を追加
+local unl_path = require("UNL.path")
 
 local M = {}
 
--- ======================================================
--- 2. DATA STRUCTURE HELPERS
--- ======================================================
+-- ... (ヘルパー関数群は変更なし) ...
+-- new_class_data, new_global_data, merge_class_data, safe_node_id はそのまま
+
 local function new_class_data(text, kind, line, id, file_path)
     local default_access = (kind == "Struct" or kind == "UStruct") and "public" or "private"
     return {
@@ -56,6 +56,7 @@ local function safe_node_id(id, seen_ids)
     end
 end
 
+-- ★★★ 修正: 子要素リスト(children)も返すように変更 ★★★
 local function build_class_node(class_data, registry, render_seen_ids)
     local children = {}
     
@@ -150,12 +151,12 @@ local function build_class_node(class_data, registry, render_seen_ids)
     }, children)
     
     node:expand()
-    return node
+    
+    -- ★ ここで children も返す
+    return node, children
 end
 
--- ======================================================
--- 3. PARSING HELPERS
--- ======================================================
+-- ... (PARSING HELPERS は変更なし) ...
 local function get_node_text(node, bufnr)
     if not node then return "" end
     return vim.treesitter.get_node_text(node, bufnr)
@@ -236,9 +237,7 @@ local function is_type_reference(node)
     return false
 end
 
--- ======================================================
--- 4. CORE PARSING LOGIC
--- ======================================================
+-- ... (CORE PARSING LOGIC は変更なし) ...
 local function parse_file_content(file_path, registry)
     if not file_path or file_path == "" or vim.fn.filereadable(file_path) == 0 then 
         return {}, new_global_data(), {}
@@ -397,9 +396,7 @@ local function parse_file_content(file_path, registry)
     return classes_map, global_data, classes_list
 end
 
--- ======================================================
--- 5. BUILDERS (Async / Coroutine)
--- ======================================================
+
 local function build_tree_from_context_async(context, registry, render_seen_ids)
     local root_nodes = {}
     
@@ -407,18 +404,19 @@ local function build_tree_from_context_async(context, registry, render_seen_ids)
         for i = #context.parents, 1, -1 do
             coroutine.yield()
             local parent_info = context.parents[i]
+            
             if parent_info.header then
-                local p_map, _, _ = parse_file_content(parent_info.header, registry)
-                local p_data = p_map[parent_info.name]
-                local p_node
-                if p_data then
-                    p_node = build_class_node(p_data, registry, render_seen_ids)
-                    p_node.kind = "BaseClass"
-                else
-                    local raw_id = registry:get("base_" .. parent_info.name .. "_" .. i)
-                    local safe_id = safe_node_id(raw_id, render_seen_ids)
-                    p_node = Tree.Node({ text = parent_info.name, kind = "BaseClass", id = safe_id, file_path = parent_info.header })
-                end
+                local safe_id = safe_node_id(registry:get("base_" .. parent_info.name), render_seen_ids)
+                
+                local p_node = Tree.Node({
+                    text = parent_info.name,
+                    kind = "BaseClass",
+                    id = safe_id,
+                    file_path = parent_info.header,
+                    lazy_load = true,
+                    _has_children = true 
+                })
+                
                 p_node:collapse()
                 table.insert(root_nodes, p_node)
             end
@@ -506,10 +504,62 @@ local function build_tree_fallback(file_path, registry, render_seen_ids)
     return nodes
 end
 
+-- ★★★ 修正: 2番目の戻り値(children)を受け取って返すように変更 ★★★
+local function parse_and_get_children(file_path, target_class_name)
+    local registry = IDRegistry.new()
+    local render_seen_ids = {}
+    
+    local map, _, list = parse_file_content(file_path, registry)
+    
+    local class_data = map[target_class_name]
+    
+    if not class_data then
+        -- 大文字小文字無視
+        for name, data in pairs(map) do
+            if name:lower() == target_class_name:lower() then
+                class_data = data
+                break
+            end
+        end
+    end
+
+    if not class_data then
+        -- 接頭辞無視 (AActor -> Actor)
+        local short_target = target_class_name:match("^[UAFE](.*)") or target_class_name
+        for name, data in pairs(map) do
+             local short_name = name:match("^[UAFE](.*)") or name
+             if short_name == short_target then
+                 class_data = data
+                 break
+             end
+        end
+    end
+    
+    if not class_data and #list > 0 then
+        -- ヒューリスティック: メンバ数が多いクラス
+        table.sort(list, function(a,b) 
+             local a_count = (#a.methods.public + #a.methods.protected + #a.methods.private) + (#a.fields.public + #a.fields.protected + #a.fields.private)
+             local b_count = (#b.methods.public + #b.methods.protected + #b.methods.private) + (#b.fields.public + #b.fields.protected + #b.fields.private)
+             return a_count > b_count 
+        end)
+        class_data = list[1]
+    end
+    
+    if class_data then
+        -- ★ build_class_node から children リストを受け取る
+        local _, children = build_class_node(class_data, registry, render_seen_ids)
+        return children or {}
+    end
+    
+    logger.get().debug("parse_and_get_children: No class found in " .. file_path .. " for target " .. target_class_name)
+    return {}
+end
+
 M.parse_file_content = parse_file_content
 M.build_tree_from_context_async = build_tree_from_context_async
 M.build_tree_fallback = build_tree_fallback
 M.safe_node_id = safe_node_id
 M.new_global_data = new_global_data
+M.parse_and_get_children = parse_and_get_children
 
 return M
