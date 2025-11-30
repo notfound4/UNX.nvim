@@ -42,4 +42,11 @@ function M.explorer_refresh()
     end
 end
 
+function M.explorer_is_open()
+  if Explorer.is_open() then
+    return true
+  end
+  return false 
+end
+
 return M
