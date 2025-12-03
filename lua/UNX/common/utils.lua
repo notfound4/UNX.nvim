@@ -25,13 +25,13 @@ function M.get_vcs_icon_and_hl(status_code, config)
     -- ★変更: vcs_icons を優先し、なければ git_icons を見る (後方互換)
     local icons = uproj_conf.vcs_icons or {}
 
-    if status_code == "M" then return icons.Modified or "", "UNXGitModified" end
-    if status_code == "A" then return icons.Added or "✚", "UNXGitAdded" end
-    if status_code == "D" then return icons.Deleted or "✖", "UNXGitDeleted" end
-    if status_code == "R" then return icons.Renamed or "➜", "UNXGitRenamed" end
-    if status_code == "C" then return icons.Conflict or "", "UNXGitConflict" end
-    if status_code == "??" then return icons.Untracked or "★", "UNXGitUntracked" end
-    if status_code == "!!" then return icons.Ignored or "◌", "UNXGitIgnored" end
+    if status_code == "M" then return icons.Modified or "", "UNXVCSModified" end
+    if status_code == "A" then return icons.Added or "✚", "UNXVCSAdded" end
+    if status_code == "D" then return icons.Deleted or "✖", "UNXVCSDeleted" end
+    if status_code == "R" then return icons.Renamed or "➜", "UNXVCSRenamed" end
+    if status_code == "C" then return icons.Conflict or "", "UNXVCSConflict" end
+    if status_code == "??" then return icons.Untracked or "★", "UNXVCSUntracked" end
+    if status_code == "!!" then return icons.Ignored or "◌", "UNXVCSIgnored" end
     
 
     return "", "UNXFileName"

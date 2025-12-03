@@ -16,25 +16,28 @@ M.defaults = {
         file = { level = "trace", enable = true, max_kb = 512, rotate = 3, filename = "unx.log" },
         perf = { enabled = false, patterns = { "^refresh" }, level = "trace" },
     },
-    highlights = {
+highlights = {
         UNXDirectoryIcon = { link = "Directory" },
         UNXFileIcon      = { link = "Comment" },
         UNXFileName      = { link = "Normal" },
         UNXIndentMarker  = { link = "NonText" },
         UNXModifiedIcon  = { link = "Special" },
 
-        UNXTabActive     = { link = "UNXGitAdded" }, 
+        UNXTabActive     = { link = "UNXVCSAdded" },   -- ★ 修正
         UNXTabInactive   = { link = "Normal" },
-
         UNXTabSeparator  = { link = "NonText" },
 
-        UNXGitModified   = { link = "Special" },
-        UNXGitAdded      = { link = "String" },
-        UNXGitDeleted    = { link = "Error" },
-        UNXGitRenamed    = { link = "Title" },
-        UNXGitConflict   = { link = "ErrorMsg" },
-        UNXGitUntracked  = { link = "Function" },
-        UNXGitIgnored    = { link = "Comment" },
+        -- ★★★ 完全リネーム & 新規追加 ★★★
+        UNXVCSModified   = { link = "Special" },
+        UNXVCSAdded      = { link = "String" },
+        UNXVCSDeleted    = { link = "Error" },
+        UNXVCSRenamed    = { link = "Title" },
+        UNXVCSConflict   = { link = "ErrorMsg" },
+        UNXVCSUntracked  = { link = "Function" },
+        UNXVCSIgnored    = { link = "Comment" },
+        
+        -- ★ 新規作成: これでシンボルやWinbarが綺麗になります
+        UNXVCSFunction   = { link = "Function" }, 
     },
     uproject = {
         show_hidden = false,
@@ -91,6 +94,17 @@ M.defaults = {
             leaf_icon_hl = "Function",
         },
     },
+
+
+  vcs = {
+    git = {
+        enabled = true,
+    },
+    p4 = {
+        enabled = true,
+        auto_checkout = true,
+    },
+  },
     keymaps = {
         close = { "q" },
         open = { "<CR>", "o" },

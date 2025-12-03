@@ -264,16 +264,19 @@ local function prepare_node(node)
         icon_text = node:is_expanded() and f_open or f_close
         icon_hl = "UNXDirectoryIcon"
         
-        if node.text == "Game" then icon_hl = "UNXGitRenamed" end 
-        if node.text == "Engine" then icon_hl = "UNXGitRenamed" end
+        -- ★ 修正: Game/Engine フォルダ強調
+        if node.text == "Game" then icon_hl = "UNXVCSRenamed" end 
+        if node.text == "Engine" then icon_hl = "UNXVCSRenamed" end
         
     elseif node.type == "file" and has_devicons then
         local filename = node.text
         local ext = node.path and node.path:match("^.+%.(.+)$") or ""
         local dev_icon, dev_hl = devicons.get_icon(filename, ext, { default = true })
         if dev_icon then icon_text = dev_icon; icon_hl = dev_hl end
-        if ext == "uproject" then icon_text = "UE"; icon_hl = "UNXGitAdded" end
-        if ext == "uplugin" then icon_text = "UP"; icon_hl = "UNXGitAdded" end
+        
+        -- ★ 修正: uproject/uplugin ファイル強調
+        if ext == "uproject" then icon_text = "UE"; icon_hl = "UNXVCSAdded" end
+        if ext == "uplugin" then icon_text = "UP"; icon_hl = "UNXVCSAdded" end
         if ext == "Build.cs" then icon_text = "🔨"; icon_hl = "Special" end
     end
 

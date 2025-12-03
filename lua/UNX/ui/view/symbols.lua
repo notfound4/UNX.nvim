@@ -26,26 +26,28 @@ local function prepare_node(node)
     
     local icon, icon_hl, text_hl = " ", "Normal", "UNXFileName"
     
-    if node.kind == "UClass" then icon = "UE "; icon_hl = "UNXGitAdded"; text_hl = "Type"
-    elseif node.kind == "UStruct" then icon = "US "; icon_hl = "UNXGitAdded"; text_hl = "Type"
-    elseif node.kind == "UEnum" then icon = "En "; icon_hl = "UNXGitAdded"; text_hl = "Type"
+    -- ★★★ 修正: 新しい UNXVCS グループを適用 ★★★
+    if node.kind == "UClass" then icon = "UE "; icon_hl = "UNXVCSAdded"; text_hl = "Type"
+    elseif node.kind == "UStruct" then icon = "US "; icon_hl = "UNXVCSAdded"; text_hl = "Type"
+    elseif node.kind == "UEnum" then icon = "En "; icon_hl = "UNXVCSAdded"; text_hl = "Type"
     elseif node.kind == "Class" then icon = "󰌗 "; icon_hl = "Type"; text_hl = "Type"
     elseif node.kind == "Struct" then icon = "󰌗 "; icon_hl = "Type"; text_hl = "Type"
-    elseif node.kind == "UFunction" then icon = "UF "; icon_hl = "UNXModifiedIcon"; text_hl = "Function"
-    elseif node.kind == "Function" then icon = "󰊕 "; icon_hl = "Function"
+    
+    -- 関数系に UNXVCSFunction を適用
+    elseif node.kind == "UFunction" then icon = "UF "; icon_hl = "UNXVCSModified"; text_hl = "UNXVCSFunction"
+    elseif node.kind == "Function" then icon = "󰊕 "; icon_hl = "UNXVCSFunction"
+    
     elseif node.kind == "Constructor" then icon = " "; icon_hl = "Special"
     elseif node.kind == "UProperty" then icon = "UP "; icon_hl = "UNXDirectoryIcon"
     elseif node.kind == "Field" then icon = " "; icon_hl = "Identifier"
     elseif node.kind == "Access" then icon = " "; icon_hl = "Special"; text_hl = "Special"
     elseif node.kind == "GroupFields" then icon = " "; icon_hl = "Special"; text_hl = "Title"
     elseif node.kind == "GroupMethods" then icon = "󰊕 "; icon_hl = "Special"; text_hl = "Title"
-    elseif node.kind == "BaseClass" then icon = "󰜮 "; icon_hl = "UNXGitRenamed"; text_hl = "Comment"
+    elseif node.kind == "BaseClass" then icon = "󰜮 "; icon_hl = "UNXVCSRenamed"; text_hl = "Comment"
     elseif node.kind == "Implementation" then icon = " "; icon_hl = "Comment"; text_hl = "Comment"
     elseif node.kind == "Info" then icon = " "; icon_hl = "Comment"
     end
     
-    -- ★BaseClassで未ロード(lazy_load)の場合はアイコンを変えても良いが、ここでは標準のままで進める
-
     line:append(icon, icon_hl)
     line:append(node.text, text_hl)
     

@@ -219,7 +219,9 @@ local function update_winbars()
         if vim.bo[buf].filetype == "unx-explorer" then
             filename = "Symbols"
         end
-        local sym_bar = "%#UNXGitFunction# 󰌗 Class/Function " .. filename
+        
+        -- ★★★ 修正: 新しい UNXVCSFunction を使用 ★★★
+        local sym_bar = "%#UNXVCSFunction# 󰌗 Class/Function " .. filename
         pcall(vim.api.nvim_win_set_option, ui.win_sub, "winbar", sym_bar)
     end
 end
