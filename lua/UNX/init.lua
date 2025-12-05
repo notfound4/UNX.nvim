@@ -1,10 +1,12 @@
+-- lua/UNX/init.lua
+
 local M = {}
 
--- UNLのロギングモジュール
+-- UNLモジュール
 local unl_log = require("UNL.logging")
+local unl_finder = require("UNL.finder") -- ★追加: プロジェクト判定用
 
 local function setup_highlights(highlights)
-    -- ハイライト設定がnilの場合はガードしてクラッシュを防ぐ
     if not highlights then return end
 
     for group, opts in pairs(highlights) do
@@ -28,7 +30,6 @@ function M.setup(user_config)
     require("UNX.provider.init").setup()
     
     -- 3. ハイライト設定
-    -- ★修正: ここではマージ済みのローカル変数 'config' を使うことで nil エラーを回避
     setup_highlights(config.highlights)
     
     -- 4. Explorer UI セットアップ
@@ -41,22 +42,29 @@ function M.setup(user_config)
     local group = vim.api.nvim_create_augroup("UNX_AutoCheckout", { clear = true })
     
     local function try_checkout(buf, filepath)
-        -- ★ 重要: 実行時に UNL.config から設定を取得する
-        -- これにより、プロジェクトルートの .unlrc.json で "auto_checkout": false になっていれば
-        -- それが反映されます。
-        local conf = require("UNL.config").get("UNX")
-        
-        -- 設定チェック: vcs.p4.auto_checkout が有効か？
-        -- (設定がない、または明示的に false の場合は何もしない)
-        if not (conf.vcs and conf.vcs.p4 and conf.vcs.p4.enabled and conf.vcs.p4.auto_checkout) then
+        -- ファイルが存在しない場合は無視
+        if vim.fn.filereadable(filepath) == 0 then return end
+
+        -- ★追加: 安全ガード (プロジェクトルート判定)
+        -- 編集対象のファイルが所属するディレクトリから .uproject を探す
+        -- これにより、CWDが変わっていても、全く別の場所のファイルを開いても正しく判定できる
+        local file_dir = vim.fn.fnamemodify(filepath, ":h")
+        local project_root = unl_finder.project.find_project_root(file_dir)
+
+        -- UEプロジェクト外のファイルなら何もしない
+        if not project_root then
             return 
         end
 
-        -- ファイルが存在しない場合は無視
-        if vim.fn.filereadable(filepath) == 0 then return end
+        -- ★ 重要: 実行時に UNL.config から設定を取得する
+        local conf = require("UNL.config").get("UNX")
+        
+        -- 設定チェック
+        if not (conf.vcs and conf.vcs.p4 and conf.vcs.p4.enabled and conf.vcs.p4.auto_checkout) then
+            return 
+        end
         
         -- ★ P4管理ファイルでなければ即終了 (無視)
-        -- node_modules や システムファイルでダイアログが出るのを防ぐ
         if not unx_vcs.is_p4_managed(filepath) then
             return 
         end

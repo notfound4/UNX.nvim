@@ -11,6 +11,7 @@ local default_state = {
     mode = "normal",      -- "uep" | "none" | "normal"
     project_root = nil,   -- 文字列 (パス)
     engine_root = nil,    -- 文字列 (パス)
+    is_pending_expanded = true,
 }
 
 local function get_store_handle()
@@ -43,6 +44,10 @@ function M.get()
         -- 初期値を保存しておく
         handle:set(DATA_KEY, data)
     end
+
+    if data.is_pending_expanded == nil then
+        data.is_pending_expanded = true
+    end
     return data
 end
 
@@ -54,7 +59,8 @@ function M.set(data)
         local clean_data = {
             mode = data.mode,
             project_root = data.project_root,
-            engine_root = data.engine_root
+            engine_root = data.engine_root,
+            is_pending_expanded = data.is_pending_expanded,
         }
         handle:set(DATA_KEY, clean_data)
     end

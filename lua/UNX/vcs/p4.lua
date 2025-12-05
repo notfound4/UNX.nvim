@@ -174,4 +174,12 @@ function M.is_managed(path)
     return false
 end
 
+
+function M.get_changes()
+    local changes = {}
+    for path, status in pairs(p4_status_cache) do
+        table.insert(changes, { path = path, status = status })
+    end
+    return changes
+end
 return M

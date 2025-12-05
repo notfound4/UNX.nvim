@@ -149,4 +149,15 @@ function M.clear()
     git_status_cache = {}
 end
 
+function M.get_changes()
+    local changes = {}
+    for path, status in pairs(git_status_cache) do
+        -- Ignored (!!) は除外、それ以外は含める
+        if status ~= "!!" then
+            table.insert(changes, { path = path, status = status })
+        end
+    end
+    return changes
+end
+
 return M

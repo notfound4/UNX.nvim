@@ -8,26 +8,20 @@ local fs = require("vim.fs")
 local utils = require("UNX.common.utils")
 local file_actions = require("UNX.ui.view.action.files")
 local unl_open = require("UNL.buf.open")
-
--- ★変更: UNL.path を読み込む
 local unl_path = require("UNL.path")
-
--- ★変更: VCSモジュールを使用 (Git/P4共通)
 local unx_vcs = require("UNX.vcs")
-
--- ★変更: コンテキスト
 local ctx_uproject = require("UNX.context.uproject")
 
--- UNL Events
+-- Pending Changes ビューロジック
+local PendingView = require("UNX.ui.view.uproject.pending")
+
 local unl_events_ok, unl_events = pcall(require, "UNL.event.events")
 local unl_types_ok, unl_event_types = pcall(require, "UNL.event.types")
 
--- DevIcons
 local has_devicons, devicons = pcall(require, "nvim-web-devicons")
 
 local M = {}
 
--- UIランタイムオブジェクト (これらは保存しないのでローカル変数のまま)
 local active_tree = nil
 local tree_winid = nil
 local render_timer = nil
@@ -77,7 +71,6 @@ local function scan_directory(path)
                 local is_dir = (type == "directory")
                 table.insert(items, {
                     text = name,
-                    -- ★修正: unl_path.normalize を使用
                     id = unl_path.normalize(full_path),
                     path = full_path,
                     type = is_dir and "directory" or "file",
@@ -108,7 +101,6 @@ local function convert_uep_to_nui(uep_node)
 
     local nui_node = Tree.Node({
         text = uep_node.name,
-        -- ★修正: unl_path.normalize を使用
         id = uep_node.id or (uep_node.path and unl_path.normalize(uep_node.path)),
         path = uep_node.path,
         type = uep_node.type,
@@ -122,35 +114,35 @@ local function convert_uep_to_nui(uep_node)
     return nui_node
 end
 
-local function fetch_root_data()
-
-    local conf = require("UNX.config").get() -- ★修正: 設定を動的に取得
+local function fetch_root_data(skip_vcs_refresh)
+    local conf = require("UNX.config").get()
     local cwd = vim.loop.cwd()
     local project_info = unl_finder.project.find_project(cwd)
-    
-    -- ★ Context取得
     local ctx = ctx_uproject.get()
     
     if project_info then
-        -- ★ データ更新
         ctx.mode = "uep"
         ctx.project_root = project_info.root
-
-
-    -- print(conf.engine_path)
         
         local engine_root = unl_finder.engine.find_engine_root(project_info.uproject, {
             engine_override_path = conf.engine_path 
         })
         ctx.engine_root = engine_root
-        
-        -- ★ 保存
         ctx_uproject.set(ctx)
 
-        -- ★変更: unx_vcs を使用
-        unx_vcs.refresh(project_info.root, function() 
-            schedule_render()
-        end)
+        if not skip_vcs_refresh then
+            unx_vcs.refresh(project_info.root, function()
+                vim.schedule(function()
+                    if active_tree then
+                        -- ここで M.refresh を呼ぶと再帰ループの危険があるので
+                        -- 内部的にノード更新を行う
+                        local updated_nodes = fetch_root_data(true)
+                        active_tree:set_nodes(updated_nodes)
+                        active_tree:render()
+                    end
+                end)
+            end)
+        end
 
         local success, result = unl_api.provider.request("uep.build_tree_model", {
             capability = "uep.build_tree_model",
@@ -162,7 +154,16 @@ local function fetch_root_data()
 
         if success and result and (not result[1] or result[1].type ~= "message") then
             local nui_nodes = {}
-            for _, item in ipairs(result) do
+            
+            -- ★ 修正: 保存された設定 (ctx) に基づいてノードを作成
+            -- 自動同期を削除したので、ctx は常に「ユーザーが最後に操作した状態」を保持している
+            local pending_node = PendingView.create_root_node(ctx.is_pending_expanded)
+            if pending_node then
+                table.insert(nui_nodes, pending_node)
+            end
+
+            local top_level_uep_nodes = result[1].children or {}
+            for _, item in ipairs(top_level_uep_nodes) do
                 table.insert(nui_nodes, convert_uep_to_nui(item))
             end
             return nui_nodes
@@ -173,7 +174,6 @@ local function fetch_root_data()
         vim.notify("[UNX] Unreal Engine project (.uproject) not found.", vim.log.levels.INFO)
     end)
     
-    -- ★ データ更新 (見つからない場合)
     ctx.mode = "none"
     ctx.project_root = nil
     ctx_uproject.set(ctx)
@@ -184,7 +184,12 @@ end
 local function lazy_load_children(tree_instance, parent_node)
     if parent_node:has_children() then return end
     
-    -- ★ Context取得
+    if parent_node.extra and parent_node.extra.uep_type == PendingView.ROOT_TYPE then
+        local nui_children = PendingView.create_children_nodes()
+        tree_instance:set_nodes(nui_children, parent_node:get_id())
+        return
+    end
+
     local ctx = ctx_uproject.get()
     
     if ctx.mode == "uep" then
@@ -223,9 +228,7 @@ end
 -- COMPONENT LOADERS
 -- ======================================================
 
--- ★変更: VCSコンポーネントの読み込み
 local COMPONENTS = {
-    -- 新しい名前と古い名前の両方でアクセス可能にする
     vcs_status = require("UNX.ui.view.component.vcs"),
     modified_buffer = require("UNX.ui.view.component.modified"),
 }
@@ -235,7 +238,7 @@ local COMPONENTS = {
 -- ======================================================
 
 local function prepare_node(node)
-    local conf = require("UNX.config").get() -- ★修正: 設定を動的に取得
+    local conf = require("UNX.config").get()
     local line = Line()
     
     line:append(string.rep("  ", node:get_depth() - 1))
@@ -256,7 +259,8 @@ local function prepare_node(node)
     local uep_type = node.extra and node.extra.uep_type
     local is_folder_like = (node.type == "directory") or 
                            (uep_type == "category") or 
-                           (uep_type == "module_root")
+                           (uep_type == "module_root") or
+                           (uep_type == PendingView.ROOT_TYPE)
 
     if is_folder_like then
         local f_open = conf.uproject.icon.folder_open or ""
@@ -264,9 +268,13 @@ local function prepare_node(node)
         icon_text = node:is_expanded() and f_open or f_close
         icon_hl = "UNXDirectoryIcon"
         
-        -- ★ 修正: Game/Engine フォルダ強調
         if node.text == "Game" then icon_hl = "UNXVCSRenamed" end 
         if node.text == "Engine" then icon_hl = "UNXVCSRenamed" end
+        
+        if uep_type == PendingView.ROOT_TYPE then
+            icon_text = "" -- Diff icon
+            icon_hl = "Special"
+        end
         
     elseif node.type == "file" and has_devicons then
         local filename = node.text
@@ -274,7 +282,6 @@ local function prepare_node(node)
         local dev_icon, dev_hl = devicons.get_icon(filename, ext, { default = true })
         if dev_icon then icon_text = dev_icon; icon_hl = dev_hl end
         
-        -- ★ 修正: uproject/uplugin ファイル強調
         if ext == "uproject" then icon_text = "UE"; icon_hl = "UNXVCSAdded" end
         if ext == "uplugin" then icon_text = "UP"; icon_hl = "UNXVCSAdded" end
         if ext == "Build.cs" then icon_text = "🔨"; icon_hl = "Special" end
@@ -302,10 +309,8 @@ local function prepare_node(node)
     end
 
     local path = node.path or node.id
-    -- ★修正: unl_path.normalize を使用
     local norm_path = unl_path.normalize(path)
     
-    -- ★修正: unx_vcs を使用してステータス取得
     local vcs_stat = unx_vcs.get_status(norm_path)
     
     local name_hl = "UNXFileName"
@@ -357,19 +362,27 @@ end
 
 function M.setup()
     
+    -- 1. 重い更新 (データ構造再構築)
     vim.api.nvim_create_autocmd({ "BufWritePost", "FileChangedShellPost", "FocusGained", "DirChanged" }, {
         callback = function()
-            -- ★ Context取得
-            local ctx = ctx_uproject.get()
-            if active_tree and ctx.project_root then
-                -- ★修正: unx_vcs.refresh を使用
-                unx_vcs.refresh(ctx.project_root, function()
-                    schedule_render()
-                end)
+            local cwd = vim.loop.cwd()
+            local current_project_root = unl_finder.project.find_project_root(cwd)
+
+            if not active_tree or not current_project_root then 
+                return 
             end
+
+            -- ★ 自動同期ロジック (sync_pending_state_from_tree) はここで削除済み
+
+            unx_vcs.refresh(current_project_root, function()
+                vim.schedule(function()
+                    M.refresh(active_tree) 
+                end)
+            end)
         end
     })
 
+    -- 2. 軽い更新 (見た目だけ)
     vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "BufModifiedSet", "WinResized", "VimResized" }, {
         callback = function()
             if active_tree then
@@ -380,7 +393,6 @@ function M.setup()
 
     if unl_events_ok and unl_types_ok then
         local function on_cache_updated()
-            -- ★ Context取得
             local ctx = ctx_uproject.get()
             if active_tree and ctx.project_root then
                  vim.schedule(function()
@@ -395,7 +407,7 @@ function M.setup()
 end
 
 function M.create(bufnr, winid)
-    local conf = require("UNX.config").get() -- ★修正: 設定を動的に取得
+    local conf = require("UNX.config").get()
     tree_winid = winid
     active_tree = Tree({
         bufnr = bufnr,
@@ -425,8 +437,10 @@ function M.create(bufnr, winid)
     return active_tree
 end
 
-function M.refresh(tree_instance, winid) -- ★変更: winid 引数を追加
+function M.refresh(tree_instance, winid)
     if tree_instance then
+        -- 自動同期ロジック (sync_pending_state_from_tree) はここで削除済み
+
         if winid and vim.api.nvim_win_is_valid(winid) then
             tree_winid = winid
         end
@@ -451,6 +465,15 @@ function M.on_node_action(tree_instance, split_instance, other_split_instance)
             end
             node:expand()
         end
+        
+        -- ★ 重要: 唯一の保存ポイント
+        -- ユーザーが手動で開閉した時だけ、状態を保存する
+        if node.extra and node.extra.uep_type == PendingView.ROOT_TYPE then
+            local ctx = ctx_uproject.get()
+            ctx.is_pending_expanded = node:is_expanded()
+            ctx_uproject.set(ctx)
+        end
+
         tree_instance:render()
     else
         if node.path then
