@@ -1,6 +1,7 @@
 # UNX.nvim
 
 # Unreal Neovim eXplorer 💓 Neovim
+<img width="1220" height="818" alt="unx-main" src="https://github.com/user-attachments/assets/1fa91f76-bd2f-4fcc-8166-c67789dee83a" />
 
 `UNX.nvim` は、NeovimでのUnreal Engine開発に特化した専用のサイドバーエクスプローラーです。
 プロジェクトのファイル構造、リアルタイムのC++シンボルアウトライン、設定値（Config）、そしてUnreal Insightsのプロファイリングデータを、統一されたUIに統合します。
