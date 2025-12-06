@@ -118,6 +118,7 @@ highlights = {
         action_rename = "r",
 
         action_toggle_favorite = "b",
+        action_find_files = "f"
     },
 }
 

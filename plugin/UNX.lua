@@ -34,7 +34,21 @@ local subcommands = {
         handler = function(args)
             require("UNX.api").explorer_toggle()
         end,
-    }
+    },
+
+    ["add_favorites"] = {
+      handler = require("UNX.api").add_favorites,
+      desc = "Add files/directories to Favorites via picker.",
+      args = {
+        { name = "scope", required = false },
+        { name = "deps_flag", required = false },
+      },
+    },
+    ["favorites_files"] = {
+        handler = require("UNX.api").favorites_files,
+        desc = "List and open files from Favorites.",
+        args = {},
+    },
 }
 
 -- コマンドの登録

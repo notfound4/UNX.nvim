@@ -3,7 +3,8 @@ local M = {}
 
 -- 内部実装（UI）への依存
 local Explorer = require("UNX.ui.explorer")
-
+local cmd_add_favorites = require("UNX.cmd.add_favorites")
+local cmd_favorites_files = require("UNX.cmd.favorites_files")
 -- ======================================================
 -- Explorer API
 -- ======================================================
@@ -47,6 +48,14 @@ function M.explorer_is_open()
     return true
   end
   return false 
+end
+
+function M.add_favorites(opts)
+  cmd_add_favorites.execute(opts)
+end
+
+function M.favorites_files(opts)
+  cmd_favorites_files.execute(opts)
 end
 
 return M

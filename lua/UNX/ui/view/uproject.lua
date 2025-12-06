@@ -236,46 +236,31 @@ end
 local function lazy_load_children(tree_instance, parent_node)
     if parent_node:has_children() then return end
     
-    -- 1. Pending Changes / Unpushed Commits ルートの展開
+    -- 1. Pending Changes / Unpushed Commits ルートの展開 (変更なし)
     if parent_node.extra and (parent_node.extra.uep_type == PendingView.ROOT_TYPE_PENDING or parent_node.extra.uep_type == PendingView.ROOT_TYPE_UNPUSHED) then
         local nui_children = PendingView.create_children_nodes(parent_node)
         tree_instance:set_nodes(nui_children, parent_node:get_id())
         return
     end
 
-    -- 2. Favorites ルートの展開
+    -- 2. Favorites ルートの展開 (変更なし)
     if parent_node.extra and parent_node.extra.uep_type == FavoritesView.ROOT_TYPE then
         local nui_children = FavoritesView.create_children_nodes()
         tree_instance:set_nodes(nui_children, parent_node:get_id())
         return
     end
 
-    -- ★★★ 3. お気に入り/変更リスト内の「ディレクトリ」展開 (物理スキャン) ★★★
-    -- UEPのキャッシュに頼らず、物理的にスキャンする
-    if parent_node.extra and (parent_node.extra.is_favorite_item or parent_node.extra.is_pending_item) then
-        local children = scan_directory(parent_node.path)
-        local nui_children = {}
-        
-        for _, item in ipairs(children) do
-            -- 親のフラグを継承させる (これで孫フォルダも物理スキャンされるようになる)
-            item.extra = {
-                uep_type = "fs",
-                is_favorite_item = parent_node.extra.is_favorite_item,
-                is_pending_item = parent_node.extra.is_pending_item,
-                vcs_status_override = parent_node.extra.vcs_status_override -- Unpushed状態なども継承
-            }
-            table.insert(nui_children, Tree.Node(item))
-        end
-        
-        tree_instance:set_nodes(nui_children, parent_node:get_id())
-        return
-    end
-    -- ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-
-    -- 4. 通常のUEPツリー展開 (キャッシュベース)
+    -- 3. コンテキスト取得
     local ctx = ctx_uproject.get()
-    
+
+    -- ★★★ 4. Favoritesアイテム または 通常のUEPツリーアイテムの展開 ★★★
+    -- is_favorite_item の場合も UEP にリクエストを投げるように変更します。
+    -- ただし、UEPモード (ctx.mode == "uep") が有効であることが前提です。
     if ctx.mode == "uep" then
+        
+        -- Favoritesアイテムの場合、extra情報に "fs" タイプなどを付与してリクエストする
+        -- (favorites.lua で既に uep_type = "fs" が設定されているはずですが、念のため確認)
+        
         local success, children = unl_api.provider.request("uep.load_tree_children", {
             capability = "uep.load_tree_children",
             project_root = ctx.project_root, 
@@ -285,6 +270,7 @@ local function lazy_load_children(tree_instance, parent_node)
                 path = parent_node.path,
                 name = parent_node.text,
                 type = parent_node.type,
+                -- extra情報を渡すことで、UEP側 (provider/tree.lua) が "fs" タイプとして処理できる
                 extra = parent_node.extra 
             },
             logger_name = "UNX",
@@ -293,19 +279,36 @@ local function lazy_load_children(tree_instance, parent_node)
         if success and children then
             local nui_children = {}
             for _, item in ipairs(children) do
+                -- 取得した子ノードにも「これはFavorites内だよ」というフラグを引き継ぐ
+                if parent_node.extra and parent_node.extra.is_favorite_item then
+                    if not item.extra then item.extra = {} end
+                    item.extra.is_favorite_item = true
+                    -- uep_type = "fs" も引き継がれるはずだが、念のため
+                    item.extra.uep_type = "fs"
+                end
+                
                 table.insert(nui_children, convert_uep_to_nui(item))
             end
             tree_instance:set_nodes(nui_children, parent_node:get_id())
+            return
         end
-    else
-        -- UEPモード外 (fallback)
-        local children = scan_directory(parent_node.path)
-        local nui_children = {}
-        for _, item in ipairs(children) do
-            table.insert(nui_children, Tree.Node(item))
-        end
-        tree_instance:set_nodes(nui_children, parent_node:get_id())
     end
+
+    -- 5. フォールバック (UEPモード外、またはUEPでの取得に失敗した場合)
+    -- ここで初めて物理スキャンを行う
+    local children = scan_directory(parent_node.path)
+    local nui_children = {}
+    for _, item in ipairs(children) do
+        -- Favorites内の物理スキャンの場合もフラグを引き継ぐ
+        if parent_node.extra and parent_node.extra.is_favorite_item then
+            item.extra = {
+                uep_type = "fs",
+                is_favorite_item = true
+            }
+        end
+        table.insert(nui_children, Tree.Node(item))
+    end
+    tree_instance:set_nodes(nui_children, parent_node:get_id())
 end
 
 -- ======================================================
@@ -547,6 +550,9 @@ function M.create(bufnr, winid)
         vim.keymap.set("n", keys.action_toggle_favorite, function() file_actions.toggle_favorite(active_tree) end, map_opts)
     end
 
+    if keys.action_find_files then
+        vim.keymap.set("n", keys.action_find_files, function() file_actions.find_files_recursive(active_tree) end, map_opts)
+    end
     return active_tree
 end
 
