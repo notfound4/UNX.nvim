@@ -2,10 +2,10 @@
 
 # Unreal Neovim eXplorer 💓 Neovim
 
-`UNX.nvim` is a plugin that provides a logical tree view for Unreal Engine development in Neovim.
-It integrates project file structure, real-time C++ symbol outlining, and Unreal Insights profiling data into a single, unified UI.
+`UNX.nvim` is a dedicated side-panel explorer optimized for Unreal Engine development in Neovim.
+It unifies project file structure, real-time C++ symbol outlines, resolved configuration values, and Unreal Insights profiling data into a single, powerful UI.
 
-It acts as the UI frontend for the **Unreal Neovim Plugin Suite**, visualizing data provided by [UEP.nvim](https://github.com/taku25/UEP.nvim), [ULG.nvim](https://github.com/taku25/ULG.nvim), and [UCM.nvim](https://github.com/taku25/UCM.nvim).
+It serves as the comprehensive UI frontend for the **Unreal Neovim Plugin Suite**, visualizing data provided by [UEP.nvim](https://github.com/taku25/UEP.nvim), [ULG.nvim](https://github.com/taku25/ULG.nvim), and [UCM.nvim](https://github.com/taku25/UCM.nvim).
 
 [English](README.md) | [日本語 (Japanese)](README_ja.md)
 
@@ -14,34 +14,29 @@ It acts as the UI frontend for the **Unreal Neovim Plugin Suite**, visualizing d
 ## ✨ Features
 
   * **Project Explorer (Game & Engine)**:
-
-      * Displays a logical structure based on `.uproject` (Game, Plugins, Engine modules).
-      * Uses `UEP.nvim` as a backend to parse accurate module structures.
-      * **VCS Integration**: Visualizes file status (Modified, Added, Ignored, etc.) with icons and highlighting.
-      * **Live Updates**: Automatically detects file changes and refreshes the view.
+      * **Logical Structure**: Displays a clean hierarchy based on `.uproject` (Game, Plugins, Engine modules) without physical folder clutter.
+      * **Favorites**: Bookmark frequently used files or folders to the top of the tree (`b` key).
+      * **VCS Integration (Git & Perforce)**:
+          * **Pending Changes**: Instantly access currently modified or staged files at the very top.
+          * **Unpushed Commits**: (Git only) View files committed but not yet pushed to the remote.
+          * **Auto Checkout**: Automatically prompts to checkout read-only files (P4) upon editing.
+      * **File Operations**: Create classes, rename (smart refactor via UCM), move, and delete files directly from the tree.
 
   * **Smart C++ Symbol Outline**:
+      * Displays a real-time tree of the active buffer's structure using a custom Tree-sitter parser.
+      * **Unreal Specific**: Identifies `UCLASS`, `USTRUCT`, `UENUM`, `UFUNCTION`, `UPROPERTY` with distinct icons.
+      * Organized by access specifier (Public/Protected/Private) and separates implementation (`.cpp`) details.
 
-      * Uses Tree-sitter to display the structure of the currently active buffer in a real-time tree view.
-      * Specialized for Unreal C++: Identifies and displays icons for `UCLASS`, `USTRUCT`, `UENUM`, `UFUNCTION`, `UPROPERTY`, etc.
-      * Organizes symbols by distinction: Public / Protected / Private / Implementation details (`.cpp`).
-      * Automatically syncs with your cursor position.
+  * **Config Explorer**:
+      * A dedicated tab to explore resolved `.ini` configuration values.
+      * Visualize how values are overridden across layers (Base -> Engine -> Project -> Platform -> User).
 
   * **Unreal Insights Integration**:
-
       * Visualizes profiling data received from `ULG.nvim`.
-      * Inspect frame data, function durations, and trace events directly inside Neovim.
-
-  * **File Management (via UCM)**:
-
-      * Perform safe file operations directly from the tree.
-      * **Add**: Create new C++ classes (`.h` + `.cpp`) or directories.
-      * **Rename/Move**: Uses `UCM.nvim` logic to safely manipulate source files according to Unreal rules.
-      * **Delete**: Remove files or directories.
+      * Inspect frame data, function durations, and trace events directly inside Neovim without leaving the editor.
 
   * **Tabbed Interface**:
-
-      * Seamlessly switch between the **Project/Symbols** view and the **Insights (Profiler)** view using the `<Tab>` key.
+      * Seamlessly switch between **Project** (`uproject`), **Config** (`config`), and **Insights** (`insights`) views using the `<Tab>` key.
 
 ## 🔧 Requirements
 
@@ -74,44 +69,16 @@ return {
     
     {
       "nvim-treesitter/nvim-treesitter",
-      -- event = { "BufReadPre", "BufNewFile" },
       branch = "main",
       lazy = false, 
       build = ":TSUpdate",
       dependencies = {
         "nvim-treesitter/nvim-treesitter-textobjects",
       },
-      opts = {
-      },
-
       config = function(_, opts)
-        vim.api.nvim_create_autocmd('User', { pattern = 'TSUpdate',
-        callback = function()
-            local parsers = require('nvim-treesitter.parsers')
-            parsers.cpp = {
-              install_info = {
-                url  = 'https://github.com/taku25/tree-sitter-unreal-cpp',
-                revision  = '89f3408b2f701a8b002c9ea690ae2d24bb2aae49',
-              },
-            }
-            parsers.ushader = {
-              install_info = {
-                url  = 'https://github.com/taku25/tree-sitter-unreal-shader',
-                revision  = '26f0617475bb5d5accb4d55bd4cc5facbca81bbd',
-              },
-            }
-        end})
-        local langs = { "c", "c_sharp", "cpp", "ushader"  }
-        require("nvim-treesitter").install(langs)
-        local group = vim.api.nvim_create_augroup('MyTreesitter', { clear = true })
-        vim.api.nvim_create_autocmd('FileType', {
-          group = group,
-          pattern = langs,
-          callback = function(args)
-            vim.treesitter.start(args.buf)
-            vim.bo[args.buf].indentexpr = "v:lua.require'nvim-treesitter'.indentexpr()"
-          end,
-        })
+        -- Configure custom parsers for Unreal C++ and Shaders
+        -- (See UEP.nvim or README for detailed parser setup)
+        require("nvim-treesitter.configs").setup(opts)
       end
     }
   },
@@ -119,7 +86,7 @@ return {
     -- Your configuration here
   },
 }
-```
+````
 
 ## ⚙️ Configuration
 
@@ -143,7 +110,7 @@ opts = {
             default_file    = "",
             modified        = "[+] ",
         },
-        -- Icons for Git Status
+        -- Icons for VCS Status
         vcs_icons = {
             Modified  = "",
             Added     = "✚",
@@ -153,12 +120,13 @@ opts = {
             Untracked = "★",
             Ignored   = "◌",
         },
-        ui = {
-            -- Components to show on the right side of the file tree
-            right_components = {
-                "vcs_status",
-                "modified_buffer",
-            },
+    },
+    -- Version Control System Settings
+    vcs = {
+        git = { enabled = true },
+        p4 = { 
+            enabled = true,
+            auto_checkout = true, -- Automatically checkout read-only files on edit
         },
     },
     keymaps = {
@@ -168,14 +136,14 @@ opts = {
         vsplit = "s",
         split = "i",
 
-        -- File Actions (requires UCM.nvim for some)
+        -- Actions
         action_add = "a",            -- Add file/class
         action_add_directory = "A",  -- Add directory
         action_delete = "d",         -- Delete
         action_move = "m",           -- Move
         action_rename = "r",         -- Rename
+        action_toggle_favorite = "b" -- Toggle Favorite (Bookmark)
     },
-    -- ... other highlights and logging settings
 }
 ```
 
@@ -186,26 +154,30 @@ opts = {
   * **:UNX open** - Open the explorer window.
   * **:UNX close** - Close the explorer window.
   * **:UNX toggle** - Toggle the explorer window.
-  * **:UNX refresh** - Manually refresh the file tree and Git status.
+  * **:UNX refresh** - Manually refresh the file tree and VCS status.
 
 ### Default Keymaps (Inside UNX Window)
 
-  * `<CR>` or `o`: Open file / Toggle folder.
-  * `<Tab>`: Switch between **Project/Symbols** view and **Insights** view.
-  * `a`: Add a new C++ class or file (Integrates with `UCM` to handle `.generated.h` etc).
-  * `A`: Add a new directory.
-  * `d`: Delete file or directory.
-  * `r`: Rename (Executes smart rename for C++ classes).
-  * `m`: Move.
-  * `q`: Close the window.
+| Key | Description |
+| :--- | :--- |
+| `<CR>` / `o` | Open file or toggle directory. |
+| `<Tab>` | Cycle through **Project** -\> **Config** -\> **Insights** tabs. |
+| `b` | **Bookmark**: Toggle the current item in the "Favorites" list. |
+| `a` | Add a new C++ class or file (Integrates with `UCM` for templates). |
+| `A` | Add a new directory. |
+| `d` | Delete file or directory (Removes from Favorites if used on a bookmark). |
+| `r` | Rename (Executes smart rename for C++ classes via UCM). |
+| `m` | Move file or directory. |
+| `q` | Close the window. |
 
 ## 🤝 Integration
 
-`UNX.nvim` works best when the entire Unreal plugin suite is installed.
+`UNX.nvim` acts as the hub for the entire Unreal plugin suite.
 
-  * **UEP.nvim**: Provides the backend project data. UNX visualizes what UEP scans.
-  * **UCM.nvim**: Handles logic for creating, moving, and renaming C++ classes, ensuring integrity within the Unreal Engine project.
-  * **ULG.nvim**: Feeds profiling and trace data into the UNX Insights view.
+  * **UEP.nvim**: Provides the backbone project data and caching.
+  * **UCM.nvim**: Handles logic for creating, moving, renaming, and generating code for C++ classes.
+  * **ULG.nvim**: Feeds profiling and trace data into the Insights view.
+  * **UEA.nvim**: Provides asset search capabilities and copy reference actions.
 
 ## 📜 License
 

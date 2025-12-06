@@ -2,8 +2,8 @@
 
 # Unreal Neovim eXplorer 💓 Neovim
 
-`UNX.nvim` は、NeovimでのUnreal Engine開発のためのロジカルツリービューを提供するプラグインです
-プロジェクトのファイル構造、リアルタイムのC++シンボルアウトライン、そしてUnreal Insightsのプロファイリングデータを、統一されたUIに統合します。
+`UNX.nvim` は、NeovimでのUnreal Engine開発に特化した専用のサイドバーエクスプローラーです。
+プロジェクトのファイル構造、リアルタイムのC++シンボルアウトライン、設定値（Config）、そしてUnreal Insightsのプロファイリングデータを、統一されたUIに統合します。
 
 これは **Unreal Neovim Plugin Suite** のUIフロントエンドとして機能し、[UEP.nvim](https://github.com/taku25/UEP.nvim)、[ULG.nvim](https://github.com/taku25/ULG.nvim)、[UCM.nvim](https://github.com/taku25/UCM.nvim) が提供するデータを可視化します。
 
@@ -13,42 +13,42 @@
 
 ## ✨ 機能 (Features)
 
-* **プロジェクトエクスプローラー (Game & Engine)**:
-    * `.uproject` に基づく論理的な構造（Game、Plugins、Engineモジュール）を表示します。
-    * `UEP.nvim` をバックエンドに使用し、正確なモジュール構造を解析します。
-    * **VCS統合**: ファイルのステータス（変更、追加、無視など）をアイコンとハイライトで可視化します。
-    * **ライブ更新**: ファイルの変更を検知して自動的にリフレッシュします。
+  * **プロジェクトエクスプローラー (Game & Engine)**:
+      * `.uproject` に基づく論理的な構造（Game、Plugins、Engineモジュール）を、物理フォルダの雑多さに惑わされずに表示します。
+      * **Favorites (お気に入り)**: よく使うファイルやフォルダを `b` キーでツリーの最上部にブックマークできます。
+      * **VCS統合 (Git & Perforce)**:
+          * **Pending Changes**: 未コミット（変更中）のファイルへ即座にアクセスできるリストを常時表示します。
+          * **Unpushed Commits**: (Gitのみ) コミット済みだがリモートにプッシュしていないファイルを一覧表示します。
+          * **Auto Checkout**: P4管理下の読み取り専用ファイルを編集しようとした際、自動でチェックアウトを促します。
+      * **ファイル操作**: ツリー上から直接、クラス作成、リネーム、移動、削除を安全に行えます。
 
-* **スマートC++シンボルアウトライン**:
-    * Tree-sitterを使用し、現在アクティブなバッファの構造をリアルタイムでツリー表示します。
-    * Unreal C++に特化しており、`UCLASS`、`USTRUCT`、`UENUM`、`UFUNCTION`、`UPROPERTY` などを識別してアイコン表示します。
-    * Public / Protected / Private / 実装詳細 (`.cpp`) を区別して整理します。
-    * カーソル位置と自動的に同期します。
+  * **スマートC++シンボルアウトライン**:
+      * Tree-sitterを使用し、現在アクティブなバッファの構造をリアルタイムでツリー表示します。
+      * `UCLASS`, `USTRUCT`, `UFUNCTION` などのUnreal特有のマクロを認識し、専用アイコンで表示します。
+      * アクセス指定子 (Public/Private) や実装詳細 (`.cpp`) を区別して整理します。
 
-* **Unreal Insights 統合**:
-    * `ULG.nvim` から受信したプロファイリングデータを可視化します。
-    * フレームデータ、関数の実行時間、トレースイベントをNeovim内で直接確認できます。
+  * **Config エクスプローラー**:
+      * `.ini` 設定ファイルの解決済み値を探索するための専用タブです。
+      * Engine -> Project -> Platform -> User と上書きされる設定値の最終結果と履歴を可視化します。
 
-* **ファイル管理 (UCM連携)**:
-    * ツリー上から直接、安全なファイル操作を実行できます。
-    * **追加 (Add)**: 新しいC++クラス（`.h` + `.cpp`）やディレクトリを作成します。
-    * **リネーム/移動 (Rename/Move)**: `UCM.nvim` のロジックを使用し、Unrealのルールに従ってソースファイルを安全に操作します。
-    * **削除 (Delete)**: ファイルやディレクトリを削除します。
+  * **Unreal Insights 統合**:
+      * `ULG.nvim` から受信したプロファイリングデータを可視化します。
+      * フレームデータ、関数実行時間、トレースイベントをNeovim内で直接確認できます。
 
-* **タブインターフェース**:
-    * **プロジェクト/シンボル** ビューと **インサイト (プロファイラー)** ビューを `<Tab>` キーでシームレスに切り替え可能です。
+  * **タブインターフェース**:
+      * **プロジェクト** (`uproject`)、**Config** (`config`)、**インサイト** (`insights`) の各ビューを `<Tab>` キーでシームレスに切り替え可能です。
 
 ## 🔧 必要要件 (Requirements)
 
-* Neovim v0.9.0 以上
-* [**UNL.nvim**](https://github.com/taku25/UNL.nvim) (**必須ライブラリ**)
-* [**UEP.nvim**](https://github.com/taku25/UEP.nvim) (**必須データプロバイダ**)
-* [**nui.nvim**](https://github.com/MunifTanjim/nui.nvim) (**必須UIコンポーネント**)
-* [nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter) (シンボル表示に必須)
-* [nvim-web-devicons](https://github.com/nvim-tree/nvim-web-devicons) (アイコン表示に推奨)
-* **フル機能のための推奨プラグイン:**
-    * [**UCM.nvim**](https://github.com/taku25/UCM.nvim) (ファイルの追加/リネーム/削除アクションに必要)
-    * [**ULG.nvim**](https://github.com/taku25/ULG.nvim) (Insightsビューのデータ表示に必要)
+  * Neovim v0.9.0 以上
+  * [**UNL.nvim**](https://github.com/taku25/UNL.nvim) (**必須ライブラリ**)
+  * [**UEP.nvim**](https://github.com/taku25/UEP.nvim) (**必須データプロバイダ**)
+  * [**nui.nvim**](https://github.com/MunifTanjim/nui.nvim) (**必須UIコンポーネント**)
+  * [nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter) (シンボル表示に必須)
+  * [nvim-web-devicons](https://github.com/nvim-tree/nvim-web-devicons) (アイコン表示に推奨)
+  * **フル機能のための推奨プラグイン:**
+      * [**UCM.nvim**](https://github.com/taku25/UCM.nvim) (ファイルの追加/リネーム/削除アクションに必要)
+      * [**ULG.nvim**](https://github.com/taku25/ULG.nvim) (Insightsビューのデータ表示に必要)
 
 ## 🚀 インストール (Installation)
 
@@ -69,44 +69,16 @@ return {
     
     {
       "nvim-treesitter/nvim-treesitter",
-      -- event = { "BufReadPre", "BufNewFile" },
       branch = "main",
       lazy = false, 
       build = ":TSUpdate",
       dependencies = {
         "nvim-treesitter/nvim-treesitter-textobjects",
       },
-      opts = {
-      },
-
       config = function(_, opts)
-        vim.api.nvim_create_autocmd('User', { pattern = 'TSUpdate',
-        callback = function()
-            local parsers = require('nvim-treesitter.parsers')
-            parsers.cpp = {
-              install_info = {
-                url  = 'https://github.com/taku25/tree-sitter-unreal-cpp',
-                revision  = '89f3408b2f701a8b002c9ea690ae2d24bb2aae49',
-              },
-            }
-            parsers.ushader = {
-              install_info = {
-                url  = 'https://github.com/taku25/tree-sitter-unreal-shader',
-                revision  = '26f0617475bb5d5accb4d55bd4cc5facbca81bbd',
-              },
-            }
-        end})
-        local langs = { "c", "c_sharp", "cpp", "ushader"  }
-        require("nvim-treesitter").install(langs)
-        local group = vim.api.nvim_create_augroup('MyTreesitter', { clear = true })
-        vim.api.nvim_create_autocmd('FileType', {
-          group = group,
-          pattern = langs,
-          callback = function(args)
-            vim.treesitter.start(args.buf)
-            vim.bo[args.buf].indentexpr = "v:lua.require'nvim-treesitter'.indentexpr()"
-          end,
-        })
+        -- Unreal C++ や Shader 用のパーサー設定
+        -- (詳細は UEP.nvim の README 等を参照してください)
+        require("nvim-treesitter.configs").setup(opts)
       end
     }
   },
@@ -148,12 +120,13 @@ opts = {
             Untracked = "★",
             Ignored   = "◌",
         },
-        ui = {
-            -- ファイルツリーの右側に表示するコンポーネント
-            right_components = {
-                "vcs_status",
-                "modified_buffer",
-            },
+    },
+    -- バージョン管理システム設定
+    vcs = {
+        git = { enabled = true },
+        p4 = { 
+            enabled = true,
+            auto_checkout = true, -- 編集時に自動チェックアウトを試みる
         },
     },
     keymaps = {
@@ -163,14 +136,14 @@ opts = {
         vsplit = "s",
         split = "i",
 
-        -- ファイル操作 (一部 UCM.nvim が必要)
-        action_add = "a",            -- ファイル/クラスの追加
-        action_add_directory = "A",  -- ディレクトリの追加
+        -- アクション
+        action_add = "a",            -- 追加
+        action_add_directory = "A",  -- ディレクトリ追加
         action_delete = "d",         -- 削除
         action_move = "m",           -- 移動
         action_rename = "r",         -- リネーム
+        action_toggle_favorite = "b" -- お気に入りトグル
     },
-    -- ... その他ハイライトやログ設定
 }
 ```
 
@@ -181,18 +154,21 @@ opts = {
   * **:UNX open** - エクスプローラーを開きます。
   * **:UNX close** - エクスプローラーを閉じます。
   * **:UNX toggle** - 開閉をトグルします。
-  * **:UNX refresh** - ファイルツリーとGitステータスを手動で更新します。
+  * **:UNX refresh** - ファイルツリーとVCSステータスを手動で更新します。
 
 ### デフォルトキーマップ (UNXウィンドウ内)
 
-  * `<CR>` または `o`: ファイルを開く / フォルダの開閉。
-  * `<Tab>`: **プロジェクト/シンボル** ビューと **インサイト** ビューを切り替え。
-  * `a`: 新しいC++クラスまたはファイルを追加 (`UCM`と連携して`.generated.h`などを考慮)。
-  * `A`: 新しいディレクトリを追加。
-  * `d`: ファイルまたはディレクトリを削除。
-  * `r`: リネーム (C++クラスの場合はスマートリネームを実行)。
-  * `m`: 移動。
-  * `q`: ウィンドウを閉じる。
+| キー | 説明 |
+| :--- | :--- |
+| `<CR>` / `o` | ファイルを開く / フォルダの開閉。 |
+| `<Tab>` | **Project** -\> **Config** -\> **Insights** タブを切り替え。 |
+| `b` | **Bookmark**: カーソル下の項目をお気に入りに追加/解除します。 |
+| `a` | 新しいC++クラスまたはファイルを追加 (`UCM`と連携して`.generated.h`などを考慮)。 |
+| `A` | 新しいディレクトリを追加。 |
+| `d` | ファイルまたはディレクトリを削除 (お気に入り項目の場合はリストから解除)。 |
+| `r` | リネーム (C++クラスの場合はスマートリネームを実行)。 |
+| `m` | 移動。 |
+| `q` | ウィンドウを閉じる。 |
 
 ## 🤝 連携 (Integration)
 
@@ -201,6 +177,7 @@ opts = {
   * **UEP.nvim**: バックエンドのプロジェクトデータを提供します。UNXはUEPがスキャンした内容を可視化します。
   * **UCM.nvim**: C++クラスの作成、移動、名前変更のロジックを処理し、Unreal Engineプロジェクトとして整合性を保ちます。
   * **ULG.nvim**: プロファイリングやトレースデータをUNXのInsightsビューに供給します。
+  * **UEA.nvim**: アセット検索や参照パスのコピー機能を提供します。
 
 ## 📜 ライセンス (License)
 
