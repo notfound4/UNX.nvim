@@ -12,8 +12,9 @@ local unl_path = require("UNL.path")
 local unx_vcs = require("UNX.vcs")
 local ctx_uproject = require("UNX.context.uproject")
 
--- Pending Changes ビューロジック
+-- ビューロジックの読み込み
 local PendingView = require("UNX.ui.view.uproject.pending")
+local FavoritesView = require("UNX.ui.view.uproject.favorites") -- ★追加
 
 local unl_events_ok, unl_events = pcall(require, "UNL.event.events")
 local unl_types_ok, unl_event_types = pcall(require, "UNL.event.types")
@@ -87,6 +88,35 @@ local function scan_directory(path)
 end
 
 -- ======================================================
+-- HELPER: State Sync
+-- ======================================================
+
+local function get_current_pending_states()
+    local states = {}
+    
+    local ctx = ctx_uproject.get()
+    if type(ctx.pending_states) ~= "table" then
+        ctx.pending_states = {
+            [PendingView.ROOT_TYPE_PENDING] = (ctx.is_pending_expanded ~= false)
+        }
+    end
+    states = vim.deepcopy(ctx.pending_states)
+
+    if active_tree then
+        local p_node = active_tree:get_node("root_pending_changes")
+        if p_node then states[PendingView.ROOT_TYPE_PENDING] = p_node:is_expanded() end
+        
+        local u_node = active_tree:get_node("root_unpushed_commits")
+        if u_node then states[PendingView.ROOT_TYPE_UNPUSHED] = u_node:is_expanded() end
+    end
+    
+    ctx.pending_states = states
+    ctx_uproject.set(ctx)
+    
+    return states
+end
+
+-- ======================================================
 -- DATA FETCHING
 -- ======================================================
 
@@ -134,8 +164,6 @@ local function fetch_root_data(skip_vcs_refresh)
             unx_vcs.refresh(project_info.root, function()
                 vim.schedule(function()
                     if active_tree then
-                        -- ここで M.refresh を呼ぶと再帰ループの危険があるので
-                        -- 内部的にノード更新を行う
                         local updated_nodes = fetch_root_data(true)
                         active_tree:set_nodes(updated_nodes)
                         active_tree:render()
@@ -155,13 +183,37 @@ local function fetch_root_data(skip_vcs_refresh)
         if success and result and (not result[1] or result[1].type ~= "message") then
             local nui_nodes = {}
             
-            -- ★ 修正: 保存された設定 (ctx) に基づいてノードを作成
-            -- 自動同期を削除したので、ctx は常に「ユーザーが最後に操作した状態」を保持している
-            local pending_node = PendingView.create_root_node(ctx.is_pending_expanded)
-            if pending_node then
-                table.insert(nui_nodes, pending_node)
+            -- ★★★ 1. Favorites (最優先) ★★★
+            local is_fav_exp = ctx.is_favorites_expanded
+            if is_fav_exp == nil then is_fav_exp = true end -- デフォルト開く
+            
+            -- 現在のツリーから状態を取得 (Live State優先)
+            if active_tree then
+                 local f_node = active_tree:get_node("root_favorites")
+                 if f_node then 
+                     is_fav_exp = f_node:is_expanded()
+                     if ctx.is_favorites_expanded ~= is_fav_exp then
+                         ctx.is_favorites_expanded = is_fav_exp
+                         ctx_uproject.set(ctx)
+                     end
+                 end
+            end
+            
+            local fav_node = FavoritesView.create_root_node(is_fav_exp)
+            if fav_node then 
+                table.insert(nui_nodes, fav_node) 
+            end
+            -- ★★★★★★★★★★★★★★★★★★★★★★★★★★★
+
+            -- ★★★ 2. Pending Changes / Unpushed ★★★
+            local pending_states = get_current_pending_states()
+            local pending_nodes_list = PendingView.create_root_nodes(pending_states)
+            
+            for _, p_node in ipairs(pending_nodes_list) do
+                table.insert(nui_nodes, p_node)
             end
 
+            -- ★★★ 3. Project Tree (UEP) ★★★
             local top_level_uep_nodes = result[1].children or {}
             for _, item in ipairs(top_level_uep_nodes) do
                 table.insert(nui_nodes, convert_uep_to_nui(item))
@@ -184,12 +236,43 @@ end
 local function lazy_load_children(tree_instance, parent_node)
     if parent_node:has_children() then return end
     
-    if parent_node.extra and parent_node.extra.uep_type == PendingView.ROOT_TYPE then
-        local nui_children = PendingView.create_children_nodes()
+    -- 1. Pending Changes / Unpushed Commits ルートの展開
+    if parent_node.extra and (parent_node.extra.uep_type == PendingView.ROOT_TYPE_PENDING or parent_node.extra.uep_type == PendingView.ROOT_TYPE_UNPUSHED) then
+        local nui_children = PendingView.create_children_nodes(parent_node)
         tree_instance:set_nodes(nui_children, parent_node:get_id())
         return
     end
 
+    -- 2. Favorites ルートの展開
+    if parent_node.extra and parent_node.extra.uep_type == FavoritesView.ROOT_TYPE then
+        local nui_children = FavoritesView.create_children_nodes()
+        tree_instance:set_nodes(nui_children, parent_node:get_id())
+        return
+    end
+
+    -- ★★★ 3. お気に入り/変更リスト内の「ディレクトリ」展開 (物理スキャン) ★★★
+    -- UEPのキャッシュに頼らず、物理的にスキャンする
+    if parent_node.extra and (parent_node.extra.is_favorite_item or parent_node.extra.is_pending_item) then
+        local children = scan_directory(parent_node.path)
+        local nui_children = {}
+        
+        for _, item in ipairs(children) do
+            -- 親のフラグを継承させる (これで孫フォルダも物理スキャンされるようになる)
+            item.extra = {
+                uep_type = "fs",
+                is_favorite_item = parent_node.extra.is_favorite_item,
+                is_pending_item = parent_node.extra.is_pending_item,
+                vcs_status_override = parent_node.extra.vcs_status_override -- Unpushed状態なども継承
+            }
+            table.insert(nui_children, Tree.Node(item))
+        end
+        
+        tree_instance:set_nodes(nui_children, parent_node:get_id())
+        return
+    end
+    -- ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
+
+    -- 4. 通常のUEPツリー展開 (キャッシュベース)
     local ctx = ctx_uproject.get()
     
     if ctx.mode == "uep" then
@@ -215,6 +298,7 @@ local function lazy_load_children(tree_instance, parent_node)
             tree_instance:set_nodes(nui_children, parent_node:get_id())
         end
     else
+        -- UEPモード外 (fallback)
         local children = scan_directory(parent_node.path)
         local nui_children = {}
         for _, item in ipairs(children) do
@@ -260,7 +344,9 @@ local function prepare_node(node)
     local is_folder_like = (node.type == "directory") or 
                            (uep_type == "category") or 
                            (uep_type == "module_root") or
-                           (uep_type == PendingView.ROOT_TYPE)
+                           (uep_type == PendingView.ROOT_TYPE_PENDING) or
+                           (uep_type == PendingView.ROOT_TYPE_UNPUSHED) or
+                           (uep_type == FavoritesView.ROOT_TYPE) -- ★追加
 
     if is_folder_like then
         local f_open = conf.uproject.icon.folder_open or ""
@@ -271,8 +357,15 @@ local function prepare_node(node)
         if node.text == "Game" then icon_hl = "UNXVCSRenamed" end 
         if node.text == "Engine" then icon_hl = "UNXVCSRenamed" end
         
-        if uep_type == PendingView.ROOT_TYPE then
+        if uep_type == PendingView.ROOT_TYPE_PENDING then
             icon_text = "" -- Diff icon
+            icon_hl = "Special"
+        elseif uep_type == PendingView.ROOT_TYPE_UNPUSHED then
+            icon_text = "" -- Upload icon
+            icon_hl = "Special"
+        elseif uep_type == FavoritesView.ROOT_TYPE then
+            -- ★追加: Favorites アイコン
+            icon_text = "" -- Star icon
             icon_hl = "Special"
         end
         
@@ -316,6 +409,16 @@ local function prepare_node(node)
     local name_hl = "UNXFileName"
     if vcs_stat then 
         _, name_hl = utils.get_vcs_icon_and_hl(vcs_stat, conf)
+    end
+    
+    -- Unpushed アイテムの強調表示
+    if node.extra and node.extra.vcs_status_override == "Unpushed" then
+        name_hl = "UNXVCSAdded"
+    end
+    
+    -- ★追加: お気に入りアイテムの強調表示 (例えば名前を黄色にする等、お好みで)
+    if node.extra and node.extra.is_favorite_item then
+        -- name_hl = "Special" -- 必要であればコメントアウトを外す
     end
 
     local display_text = node.text
@@ -362,27 +465,32 @@ end
 
 function M.setup()
     
-    -- 1. 重い更新 (データ構造再構築)
     vim.api.nvim_create_autocmd({ "BufWritePost", "FileChangedShellPost", "FocusGained", "DirChanged" }, {
         callback = function()
+            local explorer_ui = require("UNX.ui.explorer")
+            if not explorer_ui.is_open() then return end
+            
+            if not active_tree or not vim.api.nvim_buf_is_valid(active_tree.bufnr) then
+                return
+            end
+
             local cwd = vim.loop.cwd()
             local current_project_root = unl_finder.project.find_project_root(cwd)
 
-            if not active_tree or not current_project_root then 
+            if not current_project_root then 
                 return 
             end
 
-            -- ★ 自動同期ロジック (sync_pending_state_from_tree) はここで削除済み
-
             unx_vcs.refresh(current_project_root, function()
                 vim.schedule(function()
-                    M.refresh(active_tree) 
+                    if explorer_ui.is_open() and active_tree and vim.api.nvim_buf_is_valid(active_tree.bufnr) then
+                        M.refresh(active_tree)
+                    end
                 end)
             end)
         end
     })
 
-    -- 2. 軽い更新 (見た目だけ)
     vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "BufModifiedSet", "WinResized", "VimResized" }, {
         callback = function()
             if active_tree then
@@ -433,14 +541,17 @@ function M.create(bufnr, winid)
     if keys.action_rename then
         vim.keymap.set("n", keys.action_rename, function() file_actions.rename(active_tree) end, map_opts)
     end
+    
+    -- ★追加: Favoritesトグルキーマップ
+    if keys.action_toggle_favorite then
+        vim.keymap.set("n", keys.action_toggle_favorite, function() file_actions.toggle_favorite(active_tree) end, map_opts)
+    end
 
     return active_tree
 end
 
 function M.refresh(tree_instance, winid)
-    if tree_instance then
-        -- 自動同期ロジック (sync_pending_state_from_tree) はここで削除済み
-
+    if tree_instance and vim.api.nvim_buf_is_valid(tree_instance.bufnr) then
         if winid and vim.api.nvim_win_is_valid(winid) then
             tree_winid = winid
         end
@@ -466,11 +577,18 @@ function M.on_node_action(tree_instance, split_instance, other_split_instance)
             node:expand()
         end
         
-        -- ★ 重要: 唯一の保存ポイント
-        -- ユーザーが手動で開閉した時だけ、状態を保存する
-        if node.extra and node.extra.uep_type == PendingView.ROOT_TYPE then
-            local ctx = ctx_uproject.get()
-            ctx.is_pending_expanded = node:is_expanded()
+        -- 手動操作時の状態保存
+        local uep_type = node.extra and node.extra.uep_type
+        local ctx = ctx_uproject.get()
+
+        if uep_type == PendingView.ROOT_TYPE_PENDING or uep_type == PendingView.ROOT_TYPE_UNPUSHED then
+            if not ctx.pending_states then ctx.pending_states = {} end
+            ctx.pending_states[uep_type] = node:is_expanded()
+            ctx_uproject.set(ctx)
+            
+        elseif uep_type == FavoritesView.ROOT_TYPE then
+            -- ★追加: Favoritesの状態保存
+            ctx.is_favorites_expanded = node:is_expanded()
             ctx_uproject.set(ctx)
         end
 

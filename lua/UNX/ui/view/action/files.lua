@@ -1,5 +1,6 @@
 local unl_api = require("UNL.api")
 local fs = require("vim.fs")
+local favorites_cache = require("UNX.cache.favorites")
 
 local M = {}
 
@@ -222,4 +223,20 @@ function M.rename(tree)
     end
 end
 
+function M.toggle_favorite(tree)
+    local node = tree:get_node()
+    if not node then return end
+    
+    local path = sanitize_path(node.path)
+    if not path then return end
+    
+    -- ★修正: UNX内で完結させる
+    local added, msg = favorites_cache.toggle(path)
+    
+    local icon = added and "★ " or "☆ "
+    vim.notify(icon .. msg .. ": " .. vim.fn.fnamemodify(path, ":t"), vim.log.levels.INFO)
+    
+    -- ツリーをリフレッシュして反映
+    require("UNX.ui.view.uproject").refresh(tree)
+end
 return M

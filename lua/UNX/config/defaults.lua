@@ -116,6 +116,8 @@ highlights = {
         action_delete = "d",
         action_move = "m",
         action_rename = "r",
+
+        action_toggle_favorite = "b",
     },
 }
 
