@@ -49,6 +49,16 @@ local subcommands = {
         desc = "List and open files from Favorites.",
         args = {},
     },
+    ["pending_files"] = {
+        handler = require("UNX.api").pending_files,
+        desc = "List pending (local) changes.",
+        args = {},
+    },
+    ["unpushed_files"] = {
+        handler = require("UNX.api").unpushed_files,
+        desc = "List unpushed (remote) files.",
+        args = {},
+    },
 }
 
 -- コマンドの登録

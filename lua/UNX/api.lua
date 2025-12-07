@@ -5,6 +5,8 @@ local M = {}
 local Explorer = require("UNX.ui.explorer")
 local cmd_add_favorites = require("UNX.cmd.add_favorites")
 local cmd_favorites_files = require("UNX.cmd.favorites_files")
+local cmd_pending_files = require("UNX.cmd.pending_files")
+local cmd_unpushed_files = require("UNX.cmd.unpushed_files")
 -- ======================================================
 -- Explorer API
 -- ======================================================
@@ -56,6 +58,14 @@ end
 
 function M.favorites_files(opts)
   cmd_favorites_files.execute(opts)
+end
+
+function M.pending_files(opts)
+  cmd_pending_files.execute(opts)
+end
+
+function M.unpushed_files(opts)
+  cmd_unpushed_files.execute(opts)
 end
 
 return M
