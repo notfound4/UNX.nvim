@@ -3,6 +3,7 @@ local Line = require("nui.line")
 local IDRegistry = require("UNX.common.id_registry")
 local logger = require("UNX.logger")
 local unl_open = require("UNL.buf.open")
+local unl_api = require("UNL.api")
 
 local SymbolParser = require("UNX.parser.symbols")
 local ctx_symbols = require("UNX.context.symbols")
@@ -24,7 +25,6 @@ local function prepare_node(node)
     
     local icon, icon_hl, text_hl = " ", "Normal", "UNXFileName"
     
-    -- アイコン設定
     if node.kind == "UClass" then icon = "UE "; icon_hl = "UNXVCSAdded"; text_hl = "Type"
     elseif node.kind == "UStruct" then icon = "US "; icon_hl = "UNXVCSAdded"; text_hl = "Type"
     elseif node.kind == "UEnum" then icon = "En "; icon_hl = "UNXVCSAdded"; text_hl = "Type"
@@ -55,15 +55,10 @@ local function prepare_node(node)
     return line
 end
 
-function M.setup()
-end
+function M.setup() end
 
 function M.create(bufnr)
-    return Tree({
-        bufnr = bufnr,
-        nodes = {},
-        prepare_node = prepare_node,
-    })
+    return Tree({ bufnr = bufnr, nodes = {}, prepare_node = prepare_node })
 end
 
 function M.update(tree_instance, target_winid, opts)
@@ -77,8 +72,6 @@ function M.update(tree_instance, target_winid, opts)
     local ft = vim.bo[current_buf].filetype
     if ft == "unx-explorer" or ft == "neo-tree" or ft == "TelescopePrompt" or ft == "qf" then return end
 
-    -- デバウンス処理
-    local debounce_delay = 50
     if debounce_timer then
         debounce_timer:stop()
         if not debounce_timer:is_closing() then debounce_timer:close() end
@@ -86,7 +79,7 @@ function M.update(tree_instance, target_winid, opts)
     end
 
     debounce_timer = vim.loop.new_timer()
-    debounce_timer:start(debounce_delay, 0, vim.schedule_wrap(function()
+    debounce_timer:start(50, 0, vim.schedule_wrap(function()
         if debounce_timer then
             if not debounce_timer:is_closing() then debounce_timer:close() end
             debounce_timer = nil
@@ -100,12 +93,10 @@ function M.update(tree_instance, target_winid, opts)
         if not filename or filename == "" then return end
         
         local current_tick = vim.api.nvim_buf_get_changedtick(current_buf_delayed)
-
         local state = ctx_symbols.get()
         local last_class_name = state.class_name
         local last_bufnr = state.last_bufnr
 
-        -- 更新スキップ判定
         if runtime_state.ignore_next_update then
             runtime_state.ignore_next_update = false
             state.last_bufnr = current_buf_delayed
@@ -127,7 +118,6 @@ function M.update(tree_instance, target_winid, opts)
             return
         end
 
-        -- キャンセル処理
         if runtime_state.cancel_func then
             runtime_state.cancel_func()
             runtime_state.cancel_func = nil
@@ -136,17 +126,16 @@ function M.update(tree_instance, target_winid, opts)
         local is_cancelled = false
         runtime_state.cancel_func = function() is_cancelled = true end
 
-        logger.get().debug("Requesting symbols for: " .. filename)
+        logger.get().debug("Requesting symbol context for: " .. filename)
 
-        -- ★ここが重要: シンプルにUCM解析結果を表示する
-        SymbolParser.fetch_and_build(buf_name_delayed, function(nodes)
+        -- 共通の更新完了処理
+        local function finish_update(nodes)
              if is_cancelled then return end
              
              if not nodes or #nodes == 0 then
-                 logger.get().debug("No symbols found.")
+                 logger.get().debug("No symbols generated.")
              end
              
-             -- 状態更新
              state.class_name = filename
              state.last_bufnr = current_buf_delayed
              ctx_symbols.set(state)
@@ -173,7 +162,24 @@ function M.update(tree_instance, target_winid, opts)
                      runtime_state.cancel_func = nil
                  end
              end)
-        end)
+        end
+
+        -- ★★★ 修正箇所 ★★★
+        -- on_complete を opts テーブルの中に含めて渡します
+        unl_api.provider.request("uep.get_class_context", { 
+            class_name = filename,
+            on_complete = function(ctx_ok, context)
+                if is_cancelled then return end
+
+                if ctx_ok and context and context.current then
+                    SymbolParser.build_from_context(context, finish_update)
+                else
+                    logger.get().debug("Context not found, falling back to simple outline.")
+                    SymbolParser.fetch_and_build(buf_name_delayed, finish_update)
+                end
+            end
+        })
+        -- ★★★★★★★★★★★★★
     end))
 end
 
@@ -181,13 +187,39 @@ function M.on_node_action(tree_instance, split_instance, other_split_instance)
     local node = tree_instance:get_node()
     if not node then return end
     
+    if node.kind == "Class" or node.kind == "UClass" or node.kind == "Struct" or node.kind == "UStruct" then
+        return
+    end
+
+    if node.kind == "BaseClass" and node.lazy_load then
+        if node:is_expanded() then
+            node:collapse()
+        else
+            if not node:has_children() then
+                 logger.get().debug("Lazy loading base class: " .. node.text)
+                 logger.get().info("Parsing base class: " .. node.text .. "...")
+                 
+                 local children = SymbolParser.parse_and_get_children(node.file_path, node.text)
+                 
+                 if children and #children > 0 then
+                     tree_instance:set_nodes(children, node:get_id())
+                     node.lazy_load = false
+                 else
+                     logger.get().warn("No symbols found in base class.")
+                 end
+            end
+            node:expand()
+        end
+        tree_instance:render()
+        return
+    end
+
     if node:has_children() then
         if node:is_expanded() then node:collapse() else node:expand() end
         tree_instance:render()
     elseif node.line then
         if node.file_path then
              runtime_state.ignore_next_update = true
-             
              unl_open.safe({
                 file_path = node.file_path,
                 open_cmd = "edit",

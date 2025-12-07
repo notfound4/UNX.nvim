@@ -4,6 +4,10 @@ local unl_api = require("UNL.api")
 
 local M = {}
 
+-- ======================================================
+-- ヘルパー関数
+-- ======================================================
+
 local function safe_node_id(id, seen_ids)
     if not id then return "unknown_" .. vim.loop.hrtime() end
     if not seen_ids[id] then
@@ -21,7 +25,7 @@ local function safe_node_id(id, seen_ids)
     end
 end
 
-local function build_class_node(class_data, registry, render_seen_ids)
+local function build_class_node(class_data, registry, render_seen_ids, is_current_class)
     local children = {}
     local file_hash = IDRegistry.get_file_hash(class_data.file_path)
     local class_base_id = string.format("%s_%s_%d", file_hash, class_data.name, class_data.line)
@@ -81,39 +85,113 @@ local function build_class_node(class_data, registry, render_seen_ids)
         table.insert(children, Tree.Node({ text = "Functions", kind = "GroupMethods", id = make_group_id("_funcs") }, func_children))
     end
 
+    local node_id_raw = registry:get(class_base_id)
+    if not is_current_class then node_id_raw = "base_" .. node_id_raw end
+    
     local node = Tree.Node({
         text = class_data.name,
-        kind = class_data.kind,
+        kind = is_current_class and class_data.kind or "BaseClass",
         line = class_data.line,
         file_path = class_data.file_path,
-        id = safe_node_id(registry:get(class_base_id), render_seen_ids),
+        id = safe_node_id(node_id_raw, render_seen_ids),
         _has_children = (#children > 0),
     }, children)
     
-    node:expand()
-    return node
+    if is_current_class then
+        node:expand()
+    else
+        node:collapse()
+    end
+    
+    -- ★修正: children も一緒に返す
+    return node, children
 end
 
 -- ======================================================
 -- 公開API
 -- ======================================================
 
+function M.build_from_context(context, on_complete)
+    local root_nodes = {}
+    local registry = IDRegistry.new()
+    local seen_ids = {}
+
+    if context.parents then
+        for i = #context.parents, 1, -1 do
+            local p_info = context.parents[i]
+            if p_info and p_info.header then
+                local id = safe_node_id(registry:get("base_" .. p_info.name), seen_ids)
+                local p_node = Tree.Node({
+                    text = p_info.name,
+                    kind = "BaseClass",
+                    id = id,
+                    file_path = p_info.header,
+                    lazy_load = true,
+                    _has_children = true 
+                })
+                p_node:collapse()
+                table.insert(root_nodes, p_node)
+            end
+        end
+    end
+
+    local current_info = context.current
+    
+    local function process_symbols(symbols)
+        if symbols then
+            local found_main = false
+            for _, item in ipairs(symbols) do
+                if item.name == current_info.name then
+                    -- 最初の戻り値(node)だけを使う
+                    local node = build_class_node(item, registry, seen_ids, true)
+                    table.insert(root_nodes, node)
+                    found_main = true
+                end
+            end
+            
+            if not found_main and #symbols > 0 then
+                 for _, item in ipairs(symbols) do
+                    if item.kind == "UClass" or item.kind == "Class" then
+                        local node = build_class_node(item, registry, seen_ids, true)
+                        table.insert(root_nodes, node)
+                    end
+                 end
+            end
+        end
+        if on_complete then on_complete(root_nodes) end
+    end
+
+    if current_info and current_info.header then
+        local ok, res = unl_api.provider.request("ucm.get_file_symbols", {
+            file_path = current_info.header
+        })
+        if ok and res and type(res) == "table" then
+            process_symbols(res)
+        else
+            if on_complete then on_complete(root_nodes) end
+        end
+    else
+        if on_complete then on_complete(root_nodes) end
+    end
+end
+
 function M.fetch_and_build(file_path, on_complete)
-    -- UCMプロバイダーへリクエスト
-    -- UNLの仕様: requestは (success, result) を返す
     local ok, symbols = unl_api.provider.request("ucm.get_file_symbols", {
         file_path = file_path
     })
 
-    local registry = IDRegistry.new()
-    local seen_ids = {}
-    local nodes = {}
+    local function process(data)
+        if type(data) ~= "table" then data = {} end
 
-    -- 成功かつ結果がテーブルである場合のみ処理
-    if ok and symbols and type(symbols) == "table" then
-        for _, item in ipairs(symbols) do
+        local registry = IDRegistry.new()
+        local seen_ids = {}
+        local nodes = {}
+
+        for _, item in ipairs(data) do
             if item.kind == "UClass" or item.kind == "Class" or item.kind == "UStruct" or item.kind == "Struct" then
-                table.insert(nodes, build_class_node(item, registry, seen_ids))
+                -- 最初の戻り値だけ使う
+                local node = build_class_node(item, registry, seen_ids, true)
+                table.insert(nodes, node)
             else
                 local id = safe_node_id(registry:get(item.name .. item.line), seen_ids)
                 table.insert(nodes, Tree.Node({
@@ -125,21 +203,29 @@ function M.fetch_and_build(file_path, on_complete)
                 }))
             end
         end
+        if on_complete then on_complete(nodes) end
     end
 
-    if on_complete then on_complete(nodes) end
+    if ok and symbols and type(symbols) == "table" then
+        process(symbols)
+    else
+        process({})
+    end
 end
 
--- 遅延ロード用 (今回は使いませんがAPI互換のため残します)
+-- 親クラスを展開したときに呼ばれる遅延ロード関数
 function M.parse_and_get_children(file_path, class_name)
     local ok, symbols = unl_api.provider.request("ucm.get_file_symbols", { file_path = file_path })
+    
     if ok and symbols and type(symbols) == "table" then
         local registry = IDRegistry.new()
         local seen = {}
+        
         for _, item in ipairs(symbols) do
             if item.name == class_name then
-                local node = build_class_node(item, registry, seen)
-                return node:get_child_ids() and node:get_children() or {}
+                -- ★修正: build_class_node から返された children を直接返す
+                local _, children = build_class_node(item, registry, seen, true)
+                return children or {}
             end
         end
     end
