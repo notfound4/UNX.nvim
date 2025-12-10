@@ -1,3 +1,4 @@
+-- lua/UNX/config/defaults.lua
 local M = {}
 
 M.defaults = {
@@ -16,18 +17,17 @@ M.defaults = {
         file = { level = "trace", enable = true, max_kb = 512, rotate = 3, filename = "unx.log" },
         perf = { enabled = false, patterns = { "^refresh" }, level = "trace" },
     },
-highlights = {
+    highlights = {
         UNXDirectoryIcon = { link = "Directory" },
         UNXFileIcon      = { link = "Comment" },
         UNXFileName      = { link = "Normal" },
         UNXIndentMarker  = { link = "NonText" },
         UNXModifiedIcon  = { link = "Special" },
 
-        UNXTabActive     = { link = "UNXVCSAdded" },   -- ★ 修正
+        UNXTabActive     = { link = "UNXVCSAdded" },
         UNXTabInactive   = { link = "Normal" },
         UNXTabSeparator  = { link = "NonText" },
 
-        -- ★★★ 完全リネーム & 新規追加 ★★★
         UNXVCSModified   = { link = "Special" },
         UNXVCSAdded      = { link = "String" },
         UNXVCSDeleted    = { link = "Error" },
@@ -36,7 +36,6 @@ highlights = {
         UNXVCSUntracked  = { link = "Function" },
         UNXVCSIgnored    = { link = "Comment" },
         
-        -- ★ 新規作成: これでシンボルやWinbarが綺麗になります
         UNXVCSFunction   = { link = "Function" }, 
     },
     uproject = {
@@ -65,46 +64,30 @@ highlights = {
             },
         },
     },
-    -- Safe Open 設定
     safe_open = {
         prevent_in_buftypes = {
-            "nofile",
-            "quickfix",
-            "help",
-            "terminal",
-            "prompt",
+            "nofile", "quickfix", "help", "terminal", "prompt",
         },
         prevent_in_filetypes = {
-            "neo-tree",
-            "NvimTree",
-            "TelescopePrompt",
-            "fugitive",
-            "lazy",
-            "unx-explorer",
+            "neo-tree", "NvimTree", "TelescopePrompt", "fugitive", "lazy", "unx-explorer",
         },
     },
-   insights_ui = { -- ★★★ 新規追加 ★★★
+    insights_ui = { 
         icon = {
-            -- ノードが子を持つ場合のアイコン（=フォルダ/グループ）
-            group_icon_open = "",      -- ★★★ 開いているフォルダアイコン ★★★
-            group_icon_closed = "",    -- ★★★ 閉じているフォルダアイコン ★★★
+            group_icon_open = "",
+            group_icon_closed = "",
             group_icon_hl = "UNXDirectoryIcon",
-            -- ノードが子を持たない場合のアイコン（=関数/イベント）
             leaf_icon = "󰊕", 
             leaf_icon_hl = "Function",
         },
     },
-
-
-  vcs = {
-    git = {
-        enabled = true,
+    vcs = {
+        git = { enabled = true },
+        p4 = { enabled = true, auto_checkout = true },
     },
-    p4 = {
-        enabled = true,
-        auto_checkout = true,
+  symbols = {
+        expand_groups = true, -- Functions, Propertiesなどを最初から展開する
     },
-  },
     keymaps = {
         close = { "q" },
         open = { "<CR>", "o" },
@@ -112,7 +95,7 @@ highlights = {
         split = "i",
         
         action_add = "a",
-        action_add_directory = "A", -- ★追加
+        action_add_directory = "A",
         action_delete = "d",
         action_move = "m",
         action_rename = "r",

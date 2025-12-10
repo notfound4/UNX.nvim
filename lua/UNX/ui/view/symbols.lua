@@ -1,3 +1,4 @@
+-- lua/UNX/ui/view/symbols.lua
 local Tree = require("nui.tree")
 local Line = require("nui.line")
 local IDRegistry = require("UNX.common.id_registry")
@@ -128,7 +129,6 @@ function M.update(tree_instance, target_winid, opts)
 
         logger.get().debug("Requesting symbol context for: " .. filename)
 
-        -- 共通の更新完了処理
         local function finish_update(nodes)
              if is_cancelled then return end
              
@@ -164,8 +164,6 @@ function M.update(tree_instance, target_winid, opts)
              end)
         end
 
-        -- ★★★ 修正箇所 ★★★
-        -- on_complete を opts テーブルの中に含めて渡します
         unl_api.provider.request("uep.get_class_context", { 
             class_name = filename,
             on_complete = function(ctx_ok, context)
@@ -179,7 +177,6 @@ function M.update(tree_instance, target_winid, opts)
                 end
             end
         })
-        -- ★★★★★★★★★★★★★
     end))
 end
 

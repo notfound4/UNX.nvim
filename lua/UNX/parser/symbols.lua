@@ -1,12 +1,9 @@
+-- lua/UNX/parser/symbols.lua
 local IDRegistry = require("UNX.common.id_registry")
 local Tree = require("nui.tree")
 local unl_api = require("UNL.api")
-
+local unx_config = require("UNX.config") -- ★追加: 設定読み込み
 local M = {}
-
--- ======================================================
--- ヘルパー関数
--- ======================================================
 
 local function safe_node_id(id, seen_ids)
     if not id then return "unknown_" .. vim.loop.hrtime() end
@@ -30,6 +27,10 @@ local function build_class_node(class_data, registry, render_seen_ids, is_curren
     local file_hash = IDRegistry.get_file_hash(class_data.file_path)
     local class_base_id = string.format("%s_%s_%d", file_hash, class_data.name, class_data.line)
 
+    -- ★設定を取得
+    local conf = unx_config.get()
+    local should_expand = conf.symbols and conf.symbols.expand_groups
+
     local function make_group_id(suffix)
         local raw = registry:get(class_base_id .. suffix)
         return safe_node_id(raw, render_seen_ids)
@@ -48,7 +49,7 @@ local function build_class_node(class_data, registry, render_seen_ids, is_curren
         })
     end
 
-    -- Fields
+    -- Fields (Properties)
     local field_children = {}
     for _, access in ipairs({"public", "protected", "private", "impl"}) do
         if class_data.fields and class_data.fields[access] then
@@ -58,10 +59,20 @@ local function build_class_node(class_data, registry, render_seen_ids, is_curren
         end
     end
     if #field_children > 0 then
-        table.insert(children, Tree.Node({ text = "Properties", kind = "GroupFields", id = make_group_id("_props") }, field_children))
+        -- ★修正: _has_children と loaded を明示
+        local node = Tree.Node({ 
+            text = "Properties", 
+            kind = "GroupFields", 
+            id = make_group_id("_props"),
+            _has_children = true,
+            loaded = true
+        }, field_children)
+        
+        if should_expand then node:expand() end
+        table.insert(children, node)
     end
 
-    -- Methods
+    -- Methods (Functions)
     local func_children = {}
     for _, access in ipairs({"public", "protected", "private"}) do
         if class_data.methods and class_data.methods[access] then
@@ -77,12 +88,32 @@ local function build_class_node(class_data, registry, render_seen_ids, is_curren
             table.insert(impl_children, make_item_node(m))
         end
         if #impl_children > 0 then
-            table.insert(func_children, Tree.Node({ text = "Implementations", kind = "GroupMethods", id = make_group_id("_impls") }, impl_children))
+            -- ★修正: _has_children と loaded を明示
+            local node = Tree.Node({ 
+                text = "Implementations", 
+                kind = "GroupMethods", 
+                id = make_group_id("_impls"),
+                _has_children = true,
+                loaded = true
+            }, impl_children)
+            
+            if should_expand then node:expand() end
+            table.insert(func_children, node)
         end
     end
 
     if #func_children > 0 then
-        table.insert(children, Tree.Node({ text = "Functions", kind = "GroupMethods", id = make_group_id("_funcs") }, func_children))
+        -- ★修正: _has_children と loaded を明示
+        local node = Tree.Node({ 
+            text = "Functions", 
+            kind = "GroupMethods", 
+            id = make_group_id("_funcs"),
+            _has_children = true,
+            loaded = true
+        }, func_children)
+        
+        if should_expand then node:expand() end
+        table.insert(children, node)
     end
 
     local node_id_raw = registry:get(class_base_id)
@@ -103,13 +134,8 @@ local function build_class_node(class_data, registry, render_seen_ids, is_curren
         node:collapse()
     end
     
-    -- ★修正: children も一緒に返す
     return node, children
 end
-
--- ======================================================
--- 公開API
--- ======================================================
 
 function M.build_from_context(context, on_complete)
     local root_nodes = {}
@@ -142,7 +168,6 @@ function M.build_from_context(context, on_complete)
             local found_main = false
             for _, item in ipairs(symbols) do
                 if item.name == current_info.name then
-                    -- 最初の戻り値(node)だけを使う
                     local node = build_class_node(item, registry, seen_ids, true)
                     table.insert(root_nodes, node)
                     found_main = true
@@ -189,7 +214,6 @@ function M.fetch_and_build(file_path, on_complete)
 
         for _, item in ipairs(data) do
             if item.kind == "UClass" or item.kind == "Class" or item.kind == "UStruct" or item.kind == "Struct" then
-                -- 最初の戻り値だけ使う
                 local node = build_class_node(item, registry, seen_ids, true)
                 table.insert(nodes, node)
             else
@@ -213,7 +237,6 @@ function M.fetch_and_build(file_path, on_complete)
     end
 end
 
--- 親クラスを展開したときに呼ばれる遅延ロード関数
 function M.parse_and_get_children(file_path, class_name)
     local ok, symbols = unl_api.provider.request("ucm.get_file_symbols", { file_path = file_path })
     
@@ -223,7 +246,6 @@ function M.parse_and_get_children(file_path, class_name)
         
         for _, item in ipairs(symbols) do
             if item.name == class_name then
-                -- ★修正: build_class_node から返された children を直接返す
                 local _, children = build_class_node(item, registry, seen, true)
                 return children or {}
             end
