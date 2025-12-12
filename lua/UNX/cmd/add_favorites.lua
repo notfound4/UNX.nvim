@@ -70,8 +70,10 @@ function M.execute(opts)
           if count > 0 then
               vim.notify(string.format("Added %d items to Favorites.", count), vim.log.levels.INFO)
               -- ビューが開いていれば更新
-              local ok_ui, ui = pcall(require, "UNX.ui.view.uproject")
-              if ok_ui and ui.refresh then ui.refresh(nil) end
+              local ok_exp, explorer = pcall(require, "UNX.ui.explorer")
+              if ok_exp and explorer.is_open() then
+                  explorer.refresh()
+              end
           else
               vim.notify("Selected items were already in Favorites.", vim.log.levels.INFO)
           end
