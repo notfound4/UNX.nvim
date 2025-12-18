@@ -127,7 +127,8 @@ function M.update(tree_instance, target_winid, opts)
         local is_cancelled = false
         runtime_state.cancel_func = function() is_cancelled = true end
 
-        logger.get().debug("Requesting symbol context for: " .. filename)
+        -- ログを修正
+        logger.get().debug("Parsing file symbols: " .. filename)
 
         local function finish_update(nodes)
              if is_cancelled then return end
@@ -164,19 +165,24 @@ function M.update(tree_instance, target_winid, opts)
              end)
         end
 
-        unl_api.provider.request("uep.get_class_context", { 
-            class_name = filename,
-            on_complete = function(ctx_ok, context)
-                if is_cancelled then return end
+        -- ★変更点: 重いContext検索(get_class_context)をやめて、
+        -- 直接単一ファイルのパース処理(fetch_and_build)を呼ぶように変更
+        SymbolParser.fetch_and_build(buf_name_delayed, finish_update)
+        
+        -- 元の処理（親クラス検索あり）
+        -- unl_api.provider.request("uep.get_class_context", { 
+        --     class_name = filename,
+        --     on_complete = function(ctx_ok, context)
+        --         if is_cancelled then return end
 
-                if ctx_ok and context and context.current then
-                    SymbolParser.build_from_context(context, finish_update)
-                else
-                    logger.get().debug("Context not found, falling back to simple outline.")
-                    SymbolParser.fetch_and_build(buf_name_delayed, finish_update)
-                end
-            end
-        })
+        --         if ctx_ok and context and context.current then
+        --             SymbolParser.build_from_context(context, finish_update)
+        --         else
+        --             logger.get().debug("Context not found, falling back to simple outline.")
+        --             SymbolParser.fetch_and_build(buf_name_delayed, finish_update)
+        --         end
+        --     end
+        -- })
     end))
 end
 
