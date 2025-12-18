@@ -77,9 +77,15 @@ function M.toggle_parents()
 end
 
 function M.create(bufnr)
-    -- ★追加: キーマップの設定
+    -- ★修正: 設定からキーを取得して割り当て
+    local conf = require("UNX.config").get()
+    local toggle_key = conf.keymaps.action_toggle_parents or "p"
+
     local map_opts = { buffer = bufnr, noremap = true, silent = true }
-    vim.keymap.set("n", "p", function() M.toggle_parents() end, map_opts)
+    
+    if toggle_key and toggle_key ~= "" then
+        vim.keymap.set("n", toggle_key, function() M.toggle_parents() end, map_opts)
+    end
 
     return Tree({ bufnr = bufnr, nodes = {}, prepare_node = prepare_node })
 end
