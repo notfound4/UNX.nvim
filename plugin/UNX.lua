@@ -59,6 +59,11 @@ local subcommands = {
         desc = "List unpushed (remote) files.",
         args = {},
     },
+    ["favorite_current"] = {
+        handler = require("UNX.api").favorite_current,
+        desc = "Toggle the current buffer in Favorites.",
+        args = {},
+    },
 }
 
 -- コマンドの登録
