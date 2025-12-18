@@ -20,7 +20,9 @@ local runtime_state = {
 
 local debounce_timer = nil
 
+-- (prepare_node 関数は変更なしのため省略...)
 local function prepare_node(node)
+    -- ... (前回のコードと同じ) ...
     local line = Line()
     line:append(string.rep("  ", node:get_depth() - 1))
     
@@ -58,7 +60,27 @@ end
 
 function M.setup() end
 
+-- ★追加: トグル機能
+function M.toggle_parents()
+    local state = ctx_symbols.get()
+    state.show_parents = not state.show_parents
+    ctx_symbols.set(state)
+    
+    local msg = state.show_parents and "Parents: ON (Detailed/Slow)" or "Parents: OFF (Fast)"
+    -- vim.notify (msg, vim.log.levels.INFO)
+    logger.get().info(msg)
+    
+    -- 強制リフレッシュ
+    if runtime_state.tree_ref then
+        M.update(runtime_state.tree_ref, nil, { force = true })
+    end
+end
+
 function M.create(bufnr)
+    -- ★追加: キーマップの設定
+    local map_opts = { buffer = bufnr, noremap = true, silent = true }
+    vim.keymap.set("n", "p", function() M.toggle_parents() end, map_opts)
+
     return Tree({ bufnr = bufnr, nodes = {}, prepare_node = prepare_node })
 end
 
@@ -66,12 +88,12 @@ function M.update(tree_instance, target_winid, opts)
     if not tree_instance then return end
     opts = opts or {}
     
+    -- タイマー開始前の即時チェックでも、Symbolsビュー自体なら弾かないように修正
     local current_buf = vim.api.nvim_get_current_buf()
-    local buf_name = vim.api.nvim_buf_get_name(current_buf)
-    if buf_name == "" then return end
-
     local ft = vim.bo[current_buf].filetype
-    if ft == "unx-explorer" or ft == "neo-tree" or ft == "TelescopePrompt" or ft == "qf" then return end
+    
+    -- 除外リスト（unx-explorer はここでは弾かず、内部で処理する）
+    if ft == "neo-tree" or ft == "TelescopePrompt" or ft == "qf" then return end
 
     if debounce_timer then
         debounce_timer:stop()
@@ -87,6 +109,23 @@ function M.update(tree_instance, target_winid, opts)
         end
         
         local current_buf_delayed = vim.api.nvim_get_current_buf()
+        local ft_delayed = vim.bo[current_buf_delayed].filetype
+
+        -- ★修正: Symbolsビューにフォーカスがある場合、前回のバッファをターゲットにする
+        if ft_delayed == "unx-explorer" then
+            local state = ctx_symbols.get()
+            if state.last_bufnr and vim.api.nvim_buf_is_valid(state.last_bufnr) then
+                current_buf_delayed = state.last_bufnr
+                ft_delayed = vim.bo[current_buf_delayed].filetype
+            else
+                -- 前回のバッファが見つからなければ何もしない
+                return 
+            end
+        end
+
+        -- 改めて除外ファイルのチェック
+        if ft_delayed == "neo-tree" or ft_delayed == "TelescopePrompt" or ft_delayed == "qf" then return end
+
         local buf_name_delayed = vim.api.nvim_buf_get_name(current_buf_delayed)
         if buf_name_delayed == "" then return end
         
@@ -98,6 +137,7 @@ function M.update(tree_instance, target_winid, opts)
         local last_class_name = state.class_name
         local last_bufnr = state.last_bufnr
 
+        -- 強制更新フラグ(force)がある場合はチェックをスキップ
         if runtime_state.ignore_next_update then
             runtime_state.ignore_next_update = false
             state.last_bufnr = current_buf_delayed
@@ -127,9 +167,6 @@ function M.update(tree_instance, target_winid, opts)
         local is_cancelled = false
         runtime_state.cancel_func = function() is_cancelled = true end
 
-        -- ログを修正
-        logger.get().debug("Parsing file symbols: " .. filename)
-
         local function finish_update(nodes)
              if is_cancelled then return end
              
@@ -151,11 +188,14 @@ function M.update(tree_instance, target_winid, opts)
                  tree_instance:set_nodes(nodes)
                  tree_instance:render()
                  
+                 -- WinBarの更新 (target_winid が指定されている場合のみ)
                  if target_winid and vim.api.nvim_win_is_valid(target_winid) then
-                     local ft_delayed = vim.bo[current_buf_delayed].filetype
                      local icon = "󰌗"
                      if ft_delayed == "cpp" then icon = "" elseif ft_delayed == "c" then icon = "" end
-                     local bar_text = string.format("%%#UNXVCSFunction# %s %s", icon, filename)
+                     
+                     local mode_icon = state.show_parents and "" or ""
+                     local bar_text = string.format("%%#UNXVCSFunction# %s %s %s", icon, filename, mode_icon)
+                     
                      pcall(vim.api.nvim_win_set_option, target_winid, "winbar", bar_text)
                  end
                  
@@ -165,24 +205,24 @@ function M.update(tree_instance, target_winid, opts)
              end)
         end
 
-        -- ★変更点: 重いContext検索(get_class_context)をやめて、
-        -- 直接単一ファイルのパース処理(fetch_and_build)を呼ぶように変更
-        SymbolParser.fetch_and_build(buf_name_delayed, finish_update)
-        
-        -- 元の処理（親クラス検索あり）
-        -- unl_api.provider.request("uep.get_class_context", { 
-        --     class_name = filename,
-        --     on_complete = function(ctx_ok, context)
-        --         if is_cancelled then return end
+        if state.show_parents then
+            logger.get().debug("Parsing file symbols (Deep Context): " .. filename)
+            unl_api.provider.request("uep.get_class_context", { 
+                class_name = filename,
+                on_complete = function(ctx_ok, context)
+                    if is_cancelled then return end
 
-        --         if ctx_ok and context and context.current then
-        --             SymbolParser.build_from_context(context, finish_update)
-        --         else
-        --             logger.get().debug("Context not found, falling back to simple outline.")
-        --             SymbolParser.fetch_and_build(buf_name_delayed, finish_update)
-        --         end
-        --     end
-        -- })
+                    if ctx_ok and context and context.current then
+                        SymbolParser.build_from_context(context, finish_update)
+                    else
+                        SymbolParser.fetch_and_build(buf_name_delayed, finish_update)
+                    end
+                end
+            })
+        else
+            logger.get().debug("Parsing file symbols (Fast): " .. filename)
+            SymbolParser.fetch_and_build(buf_name_delayed, finish_update)
+        end
     end))
 end
 
@@ -200,7 +240,6 @@ function M.on_node_action(tree_instance, split_instance, other_split_instance)
         else
             if not node:has_children() then
                  logger.get().debug("Lazy loading base class: " .. node.text)
-                 logger.get().info("Parsing base class: " .. node.text .. "...")
                  
                  local children = SymbolParser.parse_and_get_children(node.file_path, node.text)
                  

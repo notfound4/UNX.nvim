@@ -11,6 +11,7 @@ local default_state = {
     auto_update = true,
     filter_mode = "all",
     class_name = "",
+    show_parents = false, -- ★追加: デフォルトはOFF（高速モード）
 }
 
 local function get_store_handle()
@@ -36,6 +37,12 @@ function M.get()
         data = vim.deepcopy(default_state)
         handle:set(DATA_KEY, data)
     end
+    
+    -- ★追加: 保存データにキーがない場合の安全策
+    if data.show_parents == nil then
+        data.show_parents = false
+    end
+
     return data
 end
 
@@ -47,6 +54,7 @@ function M.set(data)
             auto_update = data.auto_update,
             filter_mode = data.filter_mode,
             class_name = data.class_name,
+            show_parents = data.show_parents, -- ★追加: 保存対象に追加
         }
         handle:set(DATA_KEY, clean_data)
     end
