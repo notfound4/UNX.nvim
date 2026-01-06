@@ -95,6 +95,7 @@ M.defaults = {
         split = "i",
         
         action_add = "a",
+        action_new_file = "N",
         action_add_directory = "A",
         action_delete = "d",
         action_move = "m",
@@ -103,6 +104,7 @@ M.defaults = {
         action_toggle_favorite = "b",
         action_find_files = "f",
         action_toggle_parents = "p",
+        action_force_refresh = "R",
   },
 }
 

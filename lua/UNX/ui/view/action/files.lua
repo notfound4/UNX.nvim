@@ -41,6 +41,56 @@ function M.add(tree)
     })
 end
 
+function M.add_file(tree)
+    local node = tree:get_node()
+    if not node then return end
+    
+    local raw_target = node.path
+    if node.type == "file" then
+        raw_target = vim.fn.fnamemodify(node.path, ":h")
+    end
+    
+    local target_dir = sanitize_path(raw_target)
+    if not target_dir then return end
+
+    vim.ui.input({ prompt = "New File Name: " }, function(input)
+        if not input or input == "" then return end
+        
+        local new_file_path = vim.fs.joinpath(target_dir, input)
+        
+        if vim.loop.fs_stat(new_file_path) then
+             logger.get().error("File already exists: " .. new_file_path)
+             return
+        end
+
+        local ok, err = pcall(vim.fn.writefile, {}, new_file_path)
+        if ok then
+            logger.get().info("File created: " .. new_file_path)
+            local unl_events_ok, unl_events = pcall(require, "UNL.event.events")
+            local unl_types_ok, unl_event_types = pcall(require, "UNL.event.types")
+            if unl_events_ok and unl_types_ok then
+                 local mod_info = unl_api.find_module(new_file_path)
+                 if mod_info and mod_info.name then
+                     unl_events.publish(unl_event_types.ON_AFTER_MODIFY_DIRECTORY, {
+                        status = "success",
+                        type = "add",
+                        module = { name = mod_info.name }
+                     })
+                 end
+            end
+             
+             -- Open the new file
+            unl_buf_open.safe({
+                file_path = new_file_path,
+                open_cmd = "edit",
+                plugin_name = "UNX",
+            })
+        else
+            logger.get().error("Failed to create file: " .. tostring(err))
+        end
+    end)
+end
+
 function M.add_directory(tree)
     local node = tree:get_node()
     if not node then return end
@@ -263,7 +313,7 @@ function M.find_files_recursive(tree)
 
     unl_api.provider.request("uep.get_project_items", { 
         scope = "full",
-        deps_flag = "--deep-deps"
+        deps_flag = "--deep-deps" -- 必要に応じてこちらもファイルスキャンに切り替えることも検討
     }, function(ok, items)
         if not ok or not items then
             -- ★修正
@@ -305,6 +355,10 @@ function M.find_files_recursive(tree)
             end,
         })
     end)
+end
+
+function M.refresh(tree)
+    require("UNX.ui.view.uproject").refresh(tree)
 end
 
 return M

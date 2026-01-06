@@ -60,19 +60,46 @@ local function schedule_render()
     end))
 end
 
-local function scan_directory(path)
+-- ======================================================
+-- HELPER: File System Scan (Direct, No Cache)
+-- ======================================================
+
+local IGNORED_DIRS = {
+    [".git"] = true,
+    [".vs"] = true,
+    [".vscode"] = true,
+    [".idea"] = true,
+    ["Intermediate"] = true,
+    ["Binaries"] = true,
+    ["Saved"] = true,
+    ["DerivedDataCache"] = true,
+    ["Build"] = true,
+}
+
+local function is_ignored(name)
+    return IGNORED_DIRS[name] == true
+end
+
+local function scan_directory(path, exclude_paths)
+    if not path then return {} end
+    exclude_paths = exclude_paths or {}
+    
     local items = {}
     local handle = vim.loop.fs_scandir(path)
     if handle then
         while true do
             local name, type = vim.loop.fs_scandir_next(handle)
             if not name then break end
+            
             local full_path = fs.joinpath(path, name)
-            if not name:match("^%.") then 
+            local normalized = unl_path.normalize(full_path)
+            
+            if not name:match("^%.") and not is_ignored(name) and not exclude_paths[normalized] then 
                 local is_dir = (type == "directory")
+                
                 table.insert(items, {
                     text = name,
-                    id = unl_path.normalize(full_path),
+                    id = normalized,
                     path = full_path,
                     type = is_dir and "directory" or "file",
                     _has_children = is_dir
@@ -80,11 +107,25 @@ local function scan_directory(path)
             end
         end
     end
+    
     table.sort(items, function(a, b)
         if a.type == b.type then return a.text < b.text end
-        return a.type == "directory"
+        return a.type == "directory" -- ディレクトリ優先
     end)
-    return items
+    
+    -- NUI Node形式に変換
+    local nodes = {}
+    for _, item in ipairs(items) do
+        table.insert(nodes, Tree.Node({
+            text = item.text,
+            id = item.id,
+            path = item.path,
+            type = item.type,
+            _has_children = item._has_children
+        }))
+    end
+    
+    return nodes
 end
 
 -- ======================================================
@@ -117,41 +158,67 @@ local function get_current_pending_states()
 end
 
 -- ======================================================
--- DATA FETCHING
+-- HELPER: Tree State Restoration
 -- ======================================================
 
-local function convert_uep_to_nui(uep_node)
-    local children = nil
-    if uep_node.children and #uep_node.children > 0 then
-        children = {}
-        for _, child in ipairs(uep_node.children) do
-            table.insert(children, convert_uep_to_nui(child))
+local lazy_load_children -- Forward declaration
+
+local function get_expanded_ids(tree)
+    local expanded_ids = {}
+    local nodes = tree:get_nodes()
+    
+    local function traverse(nodes_list)
+        for _, node in ipairs(nodes_list) do
+            if node:is_expanded() then
+                expanded_ids[node:get_id()] = true
+                local children = tree:get_nodes(node:get_id())
+                if children then traverse(children) end
+            end
         end
     end
-
-    local nui_node = Tree.Node({
-        text = uep_node.name,
-        id = uep_node.id or (uep_node.path and unl_path.normalize(uep_node.path)),
-        path = uep_node.path,
-        type = uep_node.type,
-        _has_children = uep_node.has_children or (children and #children > 0),
-        extra = uep_node.extra, 
-    }, children)
     
-    if uep_node.id == "logical_root" or (children and #children > 0) then
-        nui_node:expand()
-    end
-    return nui_node
+    traverse(nodes)
+    return expanded_ids
 end
+
+local function restore_expansion(tree, expanded_ids)
+    local roots = tree:get_nodes()
+    
+    local function process(nodes_list)
+        for _, node in ipairs(nodes_list) do
+            if expanded_ids[node:get_id()] then
+                if node:has_children() or node._has_children then
+                     if not node:is_expanded() then
+                         if not node:has_children() and lazy_load_children then
+                              lazy_load_children(tree, node)
+                         end
+                         node:expand()
+                         
+                         local children = tree:get_nodes(node:get_id())
+                         if children then process(children) end
+                     end
+                end
+            end
+        end
+    end
+    
+    process(roots)
+end
+
+-- ======================================================
+-- DATA FETCHING
+-- ======================================================
 
 local function fetch_root_data(skip_vcs_refresh)
     local conf = require("UNX.config").get()
     local cwd = vim.loop.cwd()
+    
+    -- プロジェクトルートの検出 (UEPに依存せずUNL.finderを使用)
     local project_info = unl_finder.project.find_project(cwd)
     local ctx = ctx_uproject.get()
     
     if project_info then
-        ctx.mode = "uep"
+        ctx.mode = "uep" -- 便宜上UEPモードとするが、実質はファイルシステムモード
         ctx.project_root = project_info.root
         
         local engine_root = unl_finder.engine.find_engine_root(project_info.uproject, {
@@ -160,66 +227,80 @@ local function fetch_root_data(skip_vcs_refresh)
         ctx.engine_root = engine_root
         ctx_uproject.set(ctx)
 
+        -- VCSリフレッシュ (非同期)
         if not skip_vcs_refresh then
             unx_vcs.refresh(project_info.root, function()
                 vim.schedule(function()
                     if active_tree then
+                        -- VCSの状態が変わるとノード構成（Pending Changes等）が変わる可能性があるため、再構築する
+                        local expanded = get_expanded_ids(active_tree)
                         local updated_nodes = fetch_root_data(true)
                         active_tree:set_nodes(updated_nodes)
+                        restore_expansion(active_tree, expanded)
                         active_tree:render()
                     end
                 end)
             end)
         end
 
-        local success, result = unl_api.provider.request("uep.build_tree_model", {
-            capability = "uep.build_tree_model",
-            project_root = project_info.root,
-            engine_root = engine_root,
-            scope = "Full",
-            logger_name = "UNX",
-        })
+        local nui_nodes = {}
 
-        if success and result and (not result[1] or result[1].type ~= "message") then
-            local nui_nodes = {}
-            
-            -- ★★★ 1. Favorites (最優先) ★★★
-            local is_fav_exp = ctx.is_favorites_expanded
-            if is_fav_exp == nil then is_fav_exp = true end -- デフォルト開く
-            
-            -- 現在のツリーから状態を取得 (Live State優先)
-            if active_tree then
-                 local f_node = active_tree:get_node("root_favorites")
-                 if f_node then 
-                     is_fav_exp = f_node:is_expanded()
-                     if ctx.is_favorites_expanded ~= is_fav_exp then
-                         ctx.is_favorites_expanded = is_fav_exp
-                         ctx_uproject.set(ctx)
-                     end
-                 end
-            end
-            
-            local fav_node = FavoritesView.create_root_node(is_fav_exp)
-            if fav_node then 
-                table.insert(nui_nodes, fav_node) 
-            end
-            -- ★★★★★★★★★★★★★★★★★★★★★★★★★★★
-
-            -- ★★★ 2. Pending Changes / Unpushed ★★★
-            local pending_states = get_current_pending_states()
-            local pending_nodes_list = PendingView.create_root_nodes(pending_states)
-            
-            for _, p_node in ipairs(pending_nodes_list) do
-                table.insert(nui_nodes, p_node)
-            end
-
-            -- ★★★ 3. Project Tree (UEP) ★★★
-            local top_level_uep_nodes = result[1].children or {}
-            for _, item in ipairs(top_level_uep_nodes) do
-                table.insert(nui_nodes, convert_uep_to_nui(item))
-            end
-            return nui_nodes
+        -- ★★★ 1. Favorites ★★★
+        local is_fav_exp = ctx.is_favorites_expanded
+        if is_fav_exp == nil then is_fav_exp = true end
+        
+        if active_tree then
+                local f_node = active_tree:get_node("root_favorites")
+                if f_node then 
+                    is_fav_exp = f_node:is_expanded()
+                    if ctx.is_favorites_expanded ~= is_fav_exp then
+                        ctx.is_favorites_expanded = is_fav_exp
+                        ctx_uproject.set(ctx)
+                    end
+                end
         end
+        
+        local fav_node = FavoritesView.create_root_node(is_fav_exp)
+        if fav_node then 
+            table.insert(nui_nodes, fav_node) 
+        end
+
+        -- ★★★ 2. Pending Changes / Unpushed ★★★
+        local pending_states = get_current_pending_states()
+        local pending_nodes_list = PendingView.create_root_nodes(pending_states)
+        for _, p_node in ipairs(pending_nodes_list) do
+            table.insert(nui_nodes, p_node)
+        end
+
+        -- ★★★ 3. Project Root Node ★★★
+        local project_name = vim.fn.fnamemodify(project_info.root, ":t")
+        -- Engineルートがプロジェクトを含む場合や名前衝突を避けるため、プロジェクトルートIDは通常化パスを使用する
+        -- ID重複問題("Project ID" vs "Engine Child ID")は、scan_directoryでEngineスキャン時にプロジェクトを除外することで解決する
+        local project_node = Tree.Node({
+            text = project_name,
+            id = unl_path.normalize(project_info.root),
+            path = project_info.root,
+            type = "directory",
+            _has_children = true,
+            extra = { uep_type = "fs" } -- ファイルシステムノード識別子
+        })
+        project_node:expand() -- デフォルト展開
+        table.insert(nui_nodes, project_node)
+
+        -- ★★★ 4. Engine Root Node ★★★
+        if engine_root then
+             local engine_node = Tree.Node({
+                text = "Engine",
+                id = unl_path.normalize(engine_root),
+                path = engine_root,
+                type = "directory",
+                _has_children = true,
+                extra = { uep_type = "fs" }
+            })
+            table.insert(nui_nodes, engine_node)
+        end
+
+        return nui_nodes
     end
 
     vim.schedule(function()
@@ -233,82 +314,54 @@ local function fetch_root_data(skip_vcs_refresh)
     return {}
 end
 
-local function lazy_load_children(tree_instance, parent_node)
+lazy_load_children = function(tree_instance, parent_node)
     if parent_node:has_children() then return end
     
-    -- 1. Pending Changes / Unpushed Commits ルートの展開 (変更なし)
+    -- 1. Pending Changes / Unpushed Commits
     if parent_node.extra and (parent_node.extra.uep_type == PendingView.ROOT_TYPE_PENDING or parent_node.extra.uep_type == PendingView.ROOT_TYPE_UNPUSHED) then
         local nui_children = PendingView.create_children_nodes(parent_node)
         tree_instance:set_nodes(nui_children, parent_node:get_id())
         return
     end
 
-    -- 2. Favorites ルートの展開 (変更なし)
+    -- 2. Favorites
     if parent_node.extra and parent_node.extra.uep_type == FavoritesView.ROOT_TYPE then
         local nui_children = FavoritesView.create_children_nodes()
         tree_instance:set_nodes(nui_children, parent_node:get_id())
         return
     end
 
-    -- 3. コンテキスト取得
-    local ctx = ctx_uproject.get()
-
-    -- ★★★ 4. Favoritesアイテム または 通常のUEPツリーアイテムの展開 ★★★
-    -- is_favorite_item の場合も UEP にリクエストを投げるように変更します。
-    -- ただし、UEPモード (ctx.mode == "uep") が有効であることが前提です。
-    if ctx.mode == "uep" then
+    -- 3. File System (UEPリクエスト廃止 -> 直接スキャン)
+    if parent_node.path then
+        local exclude = {}
         
-        -- Favoritesアイテムの場合、extra情報に "fs" タイプなどを付与してリクエストする
-        -- (favorites.lua で既に uep_type = "fs" が設定されているはずですが、念のため確認)
-        
-        local success, children = unl_api.provider.request("uep.load_tree_children", {
-            capability = "uep.load_tree_children",
-            project_root = ctx.project_root, 
-            engine_root = ctx.engine_root,   
-            node = { 
-                id = parent_node.id, 
-                path = parent_node.path,
-                name = parent_node.text,
-                type = parent_node.type,
-                -- extra情報を渡すことで、UEP側 (provider/tree.lua) が "fs" タイプとして処理できる
-                extra = parent_node.extra 
-            },
-            logger_name = "UNX",
-        })
-
-        if success and children then
-            local nui_children = {}
-            for _, item in ipairs(children) do
-                -- 取得した子ノードにも「これはFavorites内だよ」というフラグを引き継ぐ
-                if parent_node.extra and parent_node.extra.is_favorite_item then
-                    if not item.extra then item.extra = {} end
-                    item.extra.is_favorite_item = true
-                    -- uep_type = "fs" も引き継がれるはずだが、念のため
-                    item.extra.uep_type = "fs"
-                end
-                
-                table.insert(nui_children, convert_uep_to_nui(item))
-            end
-            tree_instance:set_nodes(nui_children, parent_node:get_id())
-            return
+        -- もし自分がEngineルートの下にいる、あるいはEngineルートそのものであれば、
+        -- プロジェクトのディレクトリが表示されて重複するのを防ぐために除外リストを作成する
+        local ctx = ctx_uproject.get()
+        if ctx.project_root and ctx.engine_root then
+             local p_norm = unl_path.normalize(parent_node.path)
+             local e_norm = unl_path.normalize(ctx.engine_root)
+             
+             -- 簡易的なサブパス判定
+             local is_sub = (p_norm == e_norm) or (vim.startswith(p_norm, e_norm .. "/"))
+             
+             if is_sub then
+                 exclude[unl_path.normalize(ctx.project_root)] = true
+             end
         end
-    end
-
-    -- 5. フォールバック (UEPモード外、またはUEPでの取得に失敗した場合)
-    -- ここで初めて物理スキャンを行う
-    local children = scan_directory(parent_node.path)
-    local nui_children = {}
-    for _, item in ipairs(children) do
+        
+        local children_data = scan_directory(parent_node.path, exclude)
+        
         -- Favorites内の物理スキャンの場合もフラグを引き継ぐ
         if parent_node.extra and parent_node.extra.is_favorite_item then
-            item.extra = {
-                uep_type = "fs",
-                is_favorite_item = true
-            }
+            for _, item in ipairs(children_data) do
+                 if not item.extra then item.extra = {} end
+                 item.extra.uep_type = "fs"
+                 item.extra.is_favorite_item = true
+            end
         end
-        table.insert(nui_children, Tree.Node(item))
+        tree_instance:set_nodes(children_data, parent_node:get_id())
     end
-    tree_instance:set_nodes(nui_children, parent_node:get_id())
 end
 
 -- ======================================================
@@ -553,6 +606,11 @@ function M.create(bufnr, winid)
     if keys.action_find_files then
         vim.keymap.set("n", keys.action_find_files, function() file_actions.find_files_recursive(active_tree) end, map_opts)
     end
+
+    if keys.action_force_refresh then
+        vim.keymap.set("n", keys.action_force_refresh, function() file_actions.refresh(active_tree) end, map_opts)
+    end
+
     return active_tree
 end
 
@@ -562,8 +620,10 @@ function M.refresh(tree_instance, winid)
             tree_winid = winid
         end
 
+        local expanded = get_expanded_ids(tree_instance)
         local new_nodes = fetch_root_data()
         tree_instance:set_nodes(new_nodes)
+        restore_expansion(tree_instance, expanded)
         tree_instance:render()
         active_tree = tree_instance
     end
