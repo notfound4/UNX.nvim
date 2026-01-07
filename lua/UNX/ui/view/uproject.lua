@@ -4,6 +4,7 @@ local Tree = require("nui.tree")
 local Line = require("nui.line")
 local unl_api = require("UNL.api")
 local unl_finder = require("UNL.finder")
+local unl_context = require("UNL.context") -- Added
 local fs = require("vim.fs")
 local utils = require("UNX.common.utils")
 local file_actions = require("UNX.ui.view.action.files")
@@ -213,6 +214,10 @@ local function fetch_root_data(skip_vcs_refresh)
     local conf = require("UNX.config").get()
     local cwd = vim.loop.cwd()
     
+    -- UNX: Check for UEP Module Tree override
+    local uep_payload = unl_context.use("UEP"):key("last_tree_payload"):get("payload")
+    local is_module_mode = (uep_payload and uep_payload.scope == "Module" and uep_payload.module_root)
+
     -- プロジェクトルートの検出 (UEPに依存せずUNL.finderを使用)
     local project_info = unl_finder.project.find_project(cwd)
     local ctx = ctx_uproject.get()
@@ -245,7 +250,7 @@ local function fetch_root_data(skip_vcs_refresh)
 
         local nui_nodes = {}
 
-        -- ★★★ 1. Favorites ★★★
+        -- ★★★ 1. Favorites (Common) ★★★
         local is_fav_exp = ctx.is_favorites_expanded
         if is_fav_exp == nil then is_fav_exp = true end
         
@@ -265,12 +270,33 @@ local function fetch_root_data(skip_vcs_refresh)
             table.insert(nui_nodes, fav_node) 
         end
 
-        -- ★★★ 2. Pending Changes / Unpushed ★★★
+        -- ★★★ 2. Pending Changes / Unpushed (Common) ★★★
         local pending_states = get_current_pending_states()
         local pending_nodes_list = PendingView.create_root_nodes(pending_states)
         for _, p_node in ipairs(pending_nodes_list) do
             table.insert(nui_nodes, p_node)
         end
+
+        if is_module_mode then
+             -- [UEP Module Mode] Display only the target module
+             local mod_root = unl_path.normalize(uep_payload.module_root)
+             local mod_name = uep_payload.target_module or vim.fn.fnamemodify(mod_root, ":t")
+             
+             local mod_node = Tree.Node({
+                text = mod_name,
+                id = mod_root,
+                path = uep_payload.module_root, -- keep original for fs ops? or use normalized? best to match scan
+                type = "directory",
+                _has_children = true,
+                extra = { uep_type = "fs" }
+            })
+            mod_node:expand()
+            table.insert(nui_nodes, mod_node)
+            
+            return nui_nodes
+        end
+
+        -- [Standard Mode] Project + Engine
 
         -- ★★★ 3. Project Root Node ★★★
         local project_name = vim.fn.fnamemodify(project_info.root, ":t")
