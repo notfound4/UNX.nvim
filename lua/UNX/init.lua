@@ -35,10 +35,7 @@ function M.setup(user_config)
     -- 4. Explorer UI セットアップ
     require("UNX.ui.explorer").setup(config)
 
-    -- ターミナルgrepの設定 (rgを使用)
-    if vim.fn.executable("rg") == 1 then
-        vim.o.grepprg = "rg --vimgrep --smart-case --hidden"
-    end
+
 
     -- ============================================================
     --  自動チェックアウト機能 (Auto Checkout)
