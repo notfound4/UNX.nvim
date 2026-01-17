@@ -21,18 +21,28 @@ local unl_events_ok, unl_events = pcall(require, "UNL.event.events")
 local unl_types_ok, unl_event_types = pcall(require, "UNL.event.types")
 
 local has_devicons, devicons = pcall(require, "nvim-web-devicons")
+local cache = require("UNX.cache")
 
 local M = {}
 
+local TREE_STATE_CACHE_ID = "uproject_tree_state"
 local active_tree = nil
 local tree_winid = nil
 local render_timer = nil
+local save_timer = nil
+local expanded_state = {}
+
 
 function M.cancel_async_tasks()
     if render_timer then
         render_timer:stop()
         if not render_timer:is_closing() then render_timer:close() end
         render_timer = nil
+    end
+    if save_timer then
+        save_timer:stop()
+        if not save_timer:is_closing() then save_timer:close() end
+        save_timer = nil
     end
 end
 
@@ -54,7 +64,6 @@ local function schedule_render()
             if not render_timer:is_closing() then render_timer:close() end
             render_timer = nil
         end
-        
         if active_tree and vim.api.nvim_buf_is_valid(active_tree.bufnr) then 
             active_tree:render() 
         end
@@ -164,29 +173,11 @@ end
 
 local lazy_load_children -- Forward declaration
 
-local function get_expanded_ids(tree)
-    local expanded_ids = {}
-    local nodes = tree:get_nodes()
+local function restore_expansion(tree, expanded_ids, nodes_list)
+    local roots = nodes_list or tree:get_nodes()
     
-    local function traverse(nodes_list)
-        for _, node in ipairs(nodes_list) do
-            if node:is_expanded() then
-                expanded_ids[node:get_id()] = true
-                local children = tree:get_nodes(node:get_id())
-                if children then traverse(children) end
-            end
-        end
-    end
-    
-    traverse(nodes)
-    return expanded_ids
-end
-
-local function restore_expansion(tree, expanded_ids)
-    local roots = tree:get_nodes()
-    
-    local function process(nodes_list)
-        for _, node in ipairs(nodes_list) do
+    local function process(process_nodes_list)
+        for _, node in ipairs(process_nodes_list) do
             if expanded_ids[node:get_id()] then
                 if node:has_children() or node._has_children then
                      if not node:is_expanded() then
@@ -206,8 +197,32 @@ local function restore_expansion(tree, expanded_ids)
     process(roots)
 end
 
+function M.save_tree_state()
+    if save_timer then
+        save_timer:stop()
+        if not save_timer:is_closing() then save_timer:close() end
+    end
+    save_timer = vim.loop.new_timer()
+    save_timer:start(500, 0, vim.schedule_wrap(function()
+        if save_timer then
+            if not save_timer:is_closing() then save_timer:close() end
+            save_timer = nil
+        end
+        if active_tree and vim.api.nvim_buf_is_valid(active_tree.bufnr) then
+            local ctx = ctx_uproject.get()
+            if ctx.project_root then
+                cache.write(TREE_STATE_CACHE_ID, ctx.project_root, expanded_state)
+            end
+        end
+    end))
+end
+
+
+
 -- ======================================================
+
 -- DATA FETCHING
+
 -- ======================================================
 
 local function fetch_root_data(skip_vcs_refresh)
@@ -238,7 +253,7 @@ local function fetch_root_data(skip_vcs_refresh)
                 vim.schedule(function()
                     if active_tree then
                         -- VCSの状態が変わるとノード構成（Pending Changes等）が変わる可能性があるため、再構築する
-                        local expanded = get_expanded_ids(active_tree)
+                        local expanded = expanded_state
                         local updated_nodes = fetch_root_data(true)
                         active_tree:set_nodes(updated_nodes)
                         restore_expansion(active_tree, expanded)
@@ -546,6 +561,16 @@ end
 -- ======================================================
 
 function M.setup()
+    vim.api.nvim_create_autocmd({ "VimLeave" }, {
+        callback = function()
+            if active_tree and vim.api.nvim_buf_is_valid(active_tree.bufnr) then
+                local ctx = ctx_uproject.get()
+                if ctx.project_root then
+                    cache.write(TREE_STATE_CACHE_ID, ctx.project_root, expanded_state)
+                end
+            end
+        end,
+    })
     
     vim.api.nvim_create_autocmd({ "BufWritePost", "FileChangedShellPost", "FocusGained", "DirChanged" }, {
         callback = function()
@@ -605,6 +630,20 @@ function M.create(bufnr, winid)
         prepare_node = prepare_node,
     })
 
+    -- Restore expansion state from cache
+    local ctx = ctx_uproject.get()
+    if ctx.project_root then
+        local loaded_state = cache.read(TREE_STATE_CACHE_ID, ctx.project_root)
+        if loaded_state and type(loaded_state) == "table" then
+            expanded_state = loaded_state
+        end
+
+        if not vim.tbl_isempty(expanded_state) then
+            restore_expansion(active_tree, expanded_state)
+            active_tree:render()
+        end
+    end
+
     local map_opts = { buffer = bufnr, noremap = true, silent = true }
     local keys = conf.keymaps or {}
     
@@ -646,10 +685,10 @@ function M.refresh(tree_instance, winid)
             tree_winid = winid
         end
 
-        local expanded = get_expanded_ids(tree_instance)
+        -- Keep the current state, just rebuild the nodes
         local new_nodes = fetch_root_data()
         tree_instance:set_nodes(new_nodes)
-        restore_expansion(tree_instance, expanded)
+        restore_expansion(tree_instance, expanded_state)
         tree_instance:render()
         active_tree = tree_instance
     end
@@ -662,11 +701,19 @@ function M.on_node_action(tree_instance, split_instance, other_split_instance)
     if node:has_children() or node._has_children or node.type == "directory" then
         if node:is_expanded() then
             node:collapse()
+            expanded_state[node:get_id()] = nil
         else
             if not node:has_children() then
                 lazy_load_children(tree_instance, node)
             end
             node:expand()
+            expanded_state[node:get_id()] = true
+
+            -- Restore expansion for children of the newly expanded node
+            local children = tree_instance:get_nodes(node:get_id())
+            if children then
+                restore_expansion(tree_instance, expanded_state, children)
+            end
         end
         
         -- 手動操作時の状態保存
@@ -685,6 +732,7 @@ function M.on_node_action(tree_instance, split_instance, other_split_instance)
         end
 
         tree_instance:render()
+        M.save_tree_state()
     else
         if node.path then
              unl_open.safe({
