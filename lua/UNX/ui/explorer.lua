@@ -6,6 +6,7 @@ local ViewSymbols  = require("UNX.ui.view.symbols")
 local ViewInsights = require("UNX.ui.view.insights")
 local ViewConfig   = require("UNX.ui.view.config")
 local ctx_explorer = require("UNX.context.explorer")
+local logger_module = require("UNX.logger")
 
 local M = {}
 
@@ -399,6 +400,127 @@ end
 
 function M.is_open()
     return ui.win_main and vim.api.nvim_win_is_valid(ui.win_main)
+end
+
+function M.focus(filepath)
+    local logger = logger_module.get()
+
+    if not M.is_open() then
+        M.open()
+    end
+
+    -- Switch to the uproject tab where the file tree is
+    switch_layout("uproject")
+    vim.api.nvim_set_current_win(ui.win_main)
+
+    local tree = ui.tabs.uproject.tree
+    if not tree then return end
+
+    local ctx = require("UNX.context.uproject").get()
+    local project_root = ctx.project_root
+    if not project_root then return end
+
+    local unl_path = require("UNL.path")
+    local norm_filepath = unl_path.normalize(filepath)
+    
+    -- Check if the file is within the project root
+    if not norm_filepath:find(project_root, 1, true) then
+        logger.warn("File is not inside the current project root.")
+        return
+    end
+
+    local relative_path = norm_filepath:gsub(project_root, "", 1):match("^[/]*(.*)")
+    local path_parts = vim.split(relative_path, "[\\/]")
+
+    -- First, find the project root node in the tree
+    local root_nodes = tree:get_nodes()
+    local project_node = nil
+    local project_node_id = unl_path.normalize(project_root)
+    for _, node in ipairs(root_nodes) do
+        if node.id == project_node_id then
+            project_node = node
+            break
+        end
+    end
+
+    if not project_node then
+        logger.warn("Project root node not found in the tree.")
+        return
+    end
+
+    -- Ensure the project root node is expanded
+    if not project_node:is_expanded() then
+        ViewUproject.ensure_children_loaded(tree, project_node)
+        project_node:expand()
+        ViewUproject.set_expanded_state(project_node:get_id(), true)
+    end
+
+    local current_nodes = tree:get_nodes(project_node:get_id())
+    local target_node = nil
+
+    for i, part in ipairs(path_parts) do
+        local found_node = nil
+        if current_nodes then
+            for _, node in ipairs(current_nodes) do
+                if node.text:lower() == part:lower() then
+                    found_node = node
+                    break
+                end
+            end
+        end
+
+        if found_node then
+            target_node = found_node
+            if i < #path_parts then -- It's a directory, needs to be expanded
+                if not found_node:is_expanded() then
+                    ViewUproject.ensure_children_loaded(tree, found_node)
+                    found_node:expand()
+                    ViewUproject.set_expanded_state(found_node:get_id(), true)
+                end
+                current_nodes = tree:get_nodes(found_node:get_id())
+                if not current_nodes or #current_nodes == 0 then
+                    return -- Children not loaded yet, might be async
+                end
+            end
+        else
+            target_node = nil
+            break
+        end
+    end
+
+    if target_node then
+        -- Just render the changes. Since we updated the expanded_state and 
+        -- expanded the nodes in the loop, we don't need to full refresh.
+        tree:render()
+
+        local target_id = target_node.id
+        -- We need the project root node's ID to find where the main tree starts
+        local project_node_id = project_node.id
+
+        vim.schedule(function()
+            local count = vim.api.nvim_buf_line_count(tree.bufnr)
+            local start_line = 1
+
+            -- 1. Find the start line of the project root node to skip Favorites/Pending
+            for i = 1, count do
+                local node = tree:get_node(i)
+                if node and node.id == project_node_id then
+                    start_line = i
+                    break
+                end
+            end
+
+            -- 2. Search for the target file from the project root downwards
+            for i = start_line, count do
+                local node = tree:get_node(i)
+                -- Compare normalized paths to avoid issues with separators or drive letters
+                if node and node.path and unl_path.normalize(node.path) == norm_filepath then
+                    vim.api.nvim_win_set_cursor(ui.win_main, { i, 0 })
+                    return
+                end
+            end
+        end)
+    end
 end
 
 return M

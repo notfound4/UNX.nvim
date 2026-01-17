@@ -8,6 +8,7 @@ local cmd_favorites_files = require("UNX.cmd.favorites_files")
 local cmd_pending_files = require("UNX.cmd.pending_files")
 local cmd_unpushed_files = require("UNX.cmd.unpushed_files")
 local cmd_favorite_current = require("UNX.cmd.favorite_current")
+local logger_module = require("UNX.logger")
 -- ======================================================
 -- Explorer API
 -- ======================================================
@@ -51,6 +52,15 @@ function M.explorer_is_open()
     return true
   end
   return false 
+end
+
+function M.explorer_focus()
+    local file_path = vim.fn.expand("%:p")
+    if file_path and file_path ~= "" then
+        Explorer.focus(file_path)
+    else
+        logger_module.get().warn("[UNX] No file open in the current buffer.")
+    end
 end
 
 function M.add_favorites(opts)

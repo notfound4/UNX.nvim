@@ -35,6 +35,12 @@ local subcommands = {
             require("UNX.api").explorer_toggle()
         end,
     },
+    focus = {
+        desc = "Focus on the current file in the explorer",
+        handler = function(args)
+            require("UNX.api").explorer_focus()
+        end,
+    },
 
     ["add_favorites"] = {
       handler = require("UNX.api").add_favorites,

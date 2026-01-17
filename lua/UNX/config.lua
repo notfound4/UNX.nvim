@@ -3,7 +3,7 @@
 local M = {}
 
 -- UNL の設定システムに登録されている名前
-M.name = "UNX" 
+M.name = "UNX"
 
 --- UNLの設定システムからUNXの設定を取得します。
 --- UNLは自動的にローカルの.unlrc.json設定をマージします。

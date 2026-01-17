@@ -679,14 +679,15 @@ function M.create(bufnr, winid)
     return active_tree
 end
 
-function M.refresh(tree_instance, winid)
+function M.refresh(tree_instance, winid, opts)
+    opts = opts or {}
     if tree_instance and vim.api.nvim_buf_is_valid(tree_instance.bufnr) then
         if winid and vim.api.nvim_win_is_valid(winid) then
             tree_winid = winid
         end
 
         -- Keep the current state, just rebuild the nodes
-        local new_nodes = fetch_root_data()
+        local new_nodes = fetch_root_data(opts.skip_vcs)
         tree_instance:set_nodes(new_nodes)
         restore_expansion(tree_instance, expanded_state)
         tree_instance:render()
@@ -742,6 +743,20 @@ function M.on_node_action(tree_instance, split_instance, other_split_instance)
                 split_cmd = "vertical botright split",
             })
         end
+    end
+end
+
+function M.ensure_children_loaded(tree, node)
+    if not node:has_children() then
+        lazy_load_children(tree, node)
+    end
+end
+
+function M.set_expanded_state(node_id, is_expanded)
+    if is_expanded then
+        expanded_state[node_id] = true
+    else
+        expanded_state[node_id] = nil
     end
 end
 
