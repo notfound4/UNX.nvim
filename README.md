@@ -155,6 +155,7 @@ opts = {
   * **:UNX open** - Open the explorer window.
   * **:UNX close** - Close the explorer window.
   * **:UNX toggle** - Toggle the explorer window.
+  * **:UNX focus** - Reveal and focus the current file in the tree.
   * **:UNX refresh** - Manually refresh the file tree and VCS status.
 
 ### Default Keymaps (Inside UNX Window)
