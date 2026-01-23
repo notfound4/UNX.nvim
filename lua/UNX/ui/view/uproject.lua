@@ -680,6 +680,11 @@ function M.create(bufnr, winid)
     if keys.action_diff then
         vim.keymap.set("n", keys.action_diff, function() diff_action.diff(active_tree) end, map_opts)
     end
+    if keys.action_open_in_ide then
+        vim.keymap.set("n", keys.action_open_in_ide, function() file_actions.open_in_ide(active_tree) end, map_opts)
+    end
+
+    -- Custom Keymaps
 
     if keys.custom then
         for key, func in pairs(keys.custom) do

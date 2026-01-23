@@ -108,9 +108,9 @@ M.defaults = {
         action_toggle_parents = "p",
         action_force_refresh = "R",
         action_diff = "D",
-        
+        action_open_in_ide = "<C-o>",
         custom = {},
-  },
+    },
 }
 
 return M.defaults

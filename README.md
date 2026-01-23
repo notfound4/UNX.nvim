@@ -144,7 +144,8 @@ opts = {
         action_move = "m",           -- Move
         action_rename = "r",         -- Rename
         action_toggle_favorite = "b", -- Toggle Favorite (Bookmark)
-        action_diff = "D"            -- Diff against base (VCS)
+        action_diff = "D",            -- Diff against base (VCS)
+        action_open_in_ide = "<C-o>"  -- Open in Unreal Editor
     },
 }
 ```
@@ -164,6 +165,7 @@ opts = {
 | Key | Description |
 | :--- | :--- |
 | `<CR>` / `o` | Open file or toggle directory. |
+| `<C-o>` | **Open in Editor**: Open the selected file in the Unreal Editor. |
 | `<Tab>` | Cycle through **Project** -\> **Config** -\> **Insights** tabs. |
 | `b` | **Bookmark**: Toggle the current item in the "Favorites" list. |
 | `D` | **Diff**: Open a diff view against the VCS base version. |

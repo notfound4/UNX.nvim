@@ -144,7 +144,8 @@ opts = {
         action_move = "m",           -- 移動
         action_rename = "r",         -- リネーム
         action_toggle_favorite = "b", -- お気に入りトグル
-        action_diff = "D"            -- Diff (VCS比較)
+        action_diff = "D",            -- Diff (VCS比較)
+        action_open_in_ide = "<C-o>"  -- Unreal Editorで開く
     },
 }
 ```
@@ -164,6 +165,7 @@ opts = {
 | キー | 説明 |
 | :--- | :--- |
 | `<CR>` / `o` | ファイルを開く / フォルダの開閉。 |
+| `<C-o>` | **Open in Editor**: 選択中のファイルをUnreal Editorで開きます。 |
 | `<Tab>` | **Project** -\> **Config** -\> **Insights** タブを切り替え。 |
 | `b` | **Bookmark**: カーソル下の項目をお気に入りに追加/解除します。 |
 | `D` | **Diff**: バージョン管理システムのベースリビジョンとの差分を表示します。 |

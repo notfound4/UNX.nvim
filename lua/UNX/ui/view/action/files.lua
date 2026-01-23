@@ -357,6 +357,22 @@ function M.find_files_recursive(tree)
     end)
 end
 
+function M.open_in_ide(tree)
+    local node = tree:get_node()
+    if not node then return end
+    
+    local path = sanitize_path(node.path)
+    if not path then return end
+    
+    -- ファイル以外のノード（ディレクトリなど）の場合、Unreal Editorで開けるかはUEPの実装依存
+    -- とりあえずパスを渡してUEP側に任せる
+    logger.get().info("Opening in Unreal Editor: " .. vim.fn.fnamemodify(path, ":t"))
+    
+    unl_api.provider.request("uep.open_in_ide", {
+        file_path = path
+    })
+end
+
 function M.refresh(tree)
     require("UNX.ui.view.uproject").refresh(tree)
 end
