@@ -1,0 +1,255 @@
+*UNX.jax* For UNX.nvim                          vim: ft=help
+
+==============================================================================
+目次                                                     *UNX-contents*
+
+  1. はじめに..................................... |UNX-introduction|
+  2. 使い方....................................... |UNX-usage|
+     - コマンド一覧............................... |UNX-commands-list|
+     - キーマップ................................. |UNX-keymaps|
+  3. 設定......................................... |UNX-configuration|
+     - セットアップ............................... |UNX-setup|
+     - フルコンフィグ............................. |UNX-default-configuration|
+  4. 機能......................................... |UNX-features|
+     - プロジェクトエクスプローラー............... |UNX-feature-project|
+     - シンボルアウトライン....................... |UNX-feature-symbols|
+     - Config エクスプローラー.................... |UNX-feature-config|
+     - Insights 統合.............................. |UNX-feature-insights|
+  5. ライセンス................................... |UNX-license|
+
+==============================================================================
+1. はじめに                                         *UNX-introduction*
+
+UNX.nvim (Unreal Neovim eXplorer) は、NeovimでのUnreal Engine開発に特化した
+専用のサイドバーエクスプローラーです。プロジェクトのファイル構造、リアルタイム
+のC++シンボルアウトライン、設定値、そしてUnreal Insightsのプロファイリング
+データを、統一された強力なUIに統合します。
+
+これは *Unreal Neovim Plugin Suite* の包括的なUIフロントエンドとして機能し、
+UEP.nvim、ULG.nvim、UCM.nvim が提供するデータを可視化します。
+
+主な機能:
+- 論理的なプロジェクト構造:
+  .uproject に基づくクリーンな階層（Game, Plugins, Engineモジュール）を、
+  物理フォルダの雑多さに惑わされずに表示します。
+- VCS統合:
+  未コミットの変更 (Pending Changes) や未プッシュのコミットに即座にアクセス
+  できます。GitおよびPerforce（自動チェックアウト機能付き）をサポートします。
+- スマートC++シンボルアウトライン:
+  専用のTree-sitterパーサーを使用し、クラス、構造体、関数、プロパティの
+  リアルタイムツリーを表示します。Unreal特有のマクロ（UCLASSなど）を認識します。
+- Config エクスプローラー:
+  .iniファイルから解決された設定値を、上書き階層（Base -> Engine -> Project
+  -> Platform -> User）とともに探索できます。
+- Unreal Insights:
+  プロファイリングデータをNeovim内で直接可視化します。
+
+==============================================================================
+2. 使い方                                                     *UNX-usage*
+
+UNX.nvim のコマンドはすべて `:UNX` から始まります。
+
+------------------------------------------------------------------------------
+コマンド一覧                                           *UNX-commands-list*
+
+:UNX open
+    エクスプローラーウィンドウを開きます。
+:UNX close
+    エクスプローラーウィンドウを閉じます。
+:UNX toggle
+    エクスプローラーウィンドウの開閉をトグルします。
+:UNX focus
+    現在開いているファイルをツリー上で表示・フォーカスします。
+:UNX refresh
+    ファイルツリーとVCSステータスを手動で更新します。
+:UNX add_favorites [Scope]
+    ファイルをお気に入りに追加するためのピッカーを開きます。
+:UNX favorites_files
+    お気に入り内のファイルを検索するピッカーを開きます。
+:UNX pending_files
+    変更中のファイルを検索するピッカーを開きます。
+:UNX unpushed_files
+    未プッシュのファイルを検索するピッカーを開きます (Gitのみ)。
+:UNX favorite_current
+    現在のファイルをお気に入りに追加/解除します。
+
+------------------------------------------------------------------------------
+キーマップ                                                   *UNX-keymaps*
+
+以下のキーマップは、UNXウィンドウにフォーカスがある場合に利用可能です。
+
+| キー    | 説明                                             |
+| :---    | :---                                             |
+| <CR> / o| ファイルを開く / ディレクトリの開閉。            |
+| <Tab>   | Project -> Config -> Insights タブを切り替え。   |
+| b       | Bookmark: カーソル下の項目をお気に入りに追加/解除|
+| /       | Filter: ファイル名でツリーをフィルタリング。     |
+| D       | Diff: VCSのベースリビジョンとの差分を表示。      |
+| <C-o>   | Open in Editor: Unreal Editorで開く。            |
+| a       | 新しいC++クラスまたはファイルを追加。            |
+| A       | 新しいディレクトリを追加。                       |
+| d       | ファイルまたはディレクトリを削除。               |
+| r       | ファイルまたはディレクトリをリネーム。           |
+| m       | ファイルまたはディレクトリを移動。               |
+| q       | ウィンドウを閉じる。                             |
+| R       | ツリーを強制的にリフレッシュ。                   |
+| f       | 選択したフォルダ以下のファイルを再帰的に検索。   |
+| p       | シンボルビューでの親クラス表示をトグル。         |
+
+==============================================================================
+3. 設定                                           *UNX-configuration*
+
+UNX.nvim の設定は、依存ライブラリである UNL.nvim の設定システムを通じて
+行われます。
+
+------------------------------------------------------------------------------
+セットアップ                                                  *UNX-setup*
+
+`lazy.nvim`を使っている場合、`opts`キーに設定テーブルを渡します。
+`dependencies` に `UNL.nvim` と `UEP.nvim` を指定することが必須です。
+
+例:
+>lua
+  return {
+    'taku25/UNX.nvim',
+    dependencies = {
+       'taku25/UNL.nvim',
+       'taku25/UEP.nvim',
+       'MunifTanjim/nui.nvim',
+       'nvim-tree/nvim-web-devicons',
+    },
+    opts = {
+      window = {
+          position = "left",
+          size = { width = 35 },
+      },
+      -- その他のオプションはフルコンフィグを参照
+    },
+  }
+<
+
+------------------------------------------------------------------------------
+フルコンフィグ                               *UNX-default-configuration*
+
+以下は、UNX.nvim のデフォルト設定です。
+
+>lua
+{
+    window = {
+        position = "left", -- "left" または "right"
+        size = {
+            width = 35,
+        },
+    },
+    uproject = {
+        show_hidden = false,
+        icon = {
+            expander_open   = "",
+            expander_closed = "",
+            folder_closed   = "",
+            folder_open     = "",
+            default_file    = "",
+            modified        = "[+] ",
+        },
+        -- VCSステータスアイコン
+        vcs_icons = {
+            Modified  = "",
+            Added     = "✚",
+            Deleted   = "✖",
+            Renamed   = "➜",
+            Conflict  = "",
+            Untracked = "★",
+            Ignored   = "◌",
+        },
+    },
+    -- バージョン管理システム設定
+    vcs = {
+        git = { enabled = true },
+        p4 = { 
+            enabled = true,
+            auto_checkout = true, -- 読み取り専用ファイルの自動チェックアウト
+        },
+    },
+    keymaps = {
+        close = { "q" },
+        open = { "<CR>", "o" },
+        vsplit = "s",
+        split = "i",
+        
+        action_add = "a",
+        action_add_directory = "A",
+        action_delete = "d",
+        action_move = "m",
+        action_rename = "r",
+        action_toggle_favorite = "b",
+        action_find_files = "f",
+        action_toggle_parents = "p",
+        action_force_refresh = "R",
+        action_diff = "D",
+        action_open_in_ide = "<C-o>",
+    },
+}
+<
+
+==============================================================================
+4. 機能                                                 *UNX-features*
+
+------------------------------------------------------------------------------
+プロジェクトエクスプローラー                         *UNX-feature-project*
+
+UNX.nvimのメインビューです。UEP.nvimによって定義されたプロジェクト構造を表示し、
+中間ファイルやビルドアーティファクトを除外してクリーンに保ちます。
+以下の特別なセクションが含まれます:
+- **Favorites**: 頻繁にアクセスするファイル。
+- **Pending Changes**: VCS (Git/Perforce) で変更されたファイル。
+- **Unpushed Commits**: リモートにプッシュされていないコミット (Gitのみ)。
+
+------------------------------------------------------------------------------
+シンボルアウトライン                                 *UNX-feature-symbols*
+
+C++ファイルを開くと、UNXは自動的にサブウィンドウにシンボルツリーを表示します
+（設定されている場合）。専用のTree-sitterパーサーを使用して、`UCLASS`、
+`UFUNCTION`、`UPROPERTY` などのUnreal Engineマクロを識別し、専用アイコンで
+表示します。public、protected、private メンバーを区別して表示します。
+
+------------------------------------------------------------------------------
+Config エクスプローラー                               *UNX-feature-config*
+
+`<Tab>` キーでアクセスできます。このビューでは、`.ini` ファイルから解決された
+設定値を閲覧できます。設定の上書き階層（Base -> Engine -> Project ->
+Platform -> User）を視覚化し、最終的な値がどこで定義されているかを確認でき
+ます。
+
+------------------------------------------------------------------------------
+Insights 統合                                      *UNX-feature-insights*
+
+`<Tab>` キーでアクセスできます。`ULG.nvim` がインストールされ、トレース
+セッションに接続されている場合、このビューはプロファイリングデータ、フレーム
+タイムライン、イベントグラフをエディタ内で直接表示します。
+
+==============================================================================
+5. ライセンス                                                *UNX-license*
+
+MIT License
+
+Copyright (c) 2025 taku25
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+==============================================================================
+ vim:tw=78:ts=8:ft=help:norl:

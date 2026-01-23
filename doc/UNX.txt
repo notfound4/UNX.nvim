@@ -1,0 +1,253 @@
+*UNX.txt* For UNX.nvim                          vim: ft=help
+
+==============================================================================
+CONTENTS                                                 *UNX-contents*
+
+  1. Introduction................................. |UNX-introduction|
+  2. Usage........................................ |UNX-usage|
+     - Command List............................... |UNX-commands-list|
+     - Keymaps.................................... |UNX-keymaps|
+  3. Configuration................................ |UNX-configuration|
+     - Setup...................................... |UNX-setup|
+     - Full Configuration......................... |UNX-default-configuration|
+  4. Features..................................... |UNX-features|
+     - Project Explorer........................... |UNX-feature-project|
+     - Symbol Outline............................. |UNX-feature-symbols|
+     - Config Explorer............................ |UNX-feature-config|
+     - Insights Integration....................... |UNX-feature-insights|
+  5. License...................................... |UNX-license|
+
+==============================================================================
+1. Introduction                                     *UNX-introduction*
+
+UNX.nvim (Unreal Neovim eXplorer) is a dedicated side-panel explorer optimized
+for Unreal Engine development in Neovim. It unifies project file structure,
+real-time C++ symbol outlines, resolved configuration values, and Unreal
+Insights profiling data into a single, powerful UI.
+
+It serves as the comprehensive UI frontend for the *Unreal Neovim Plugin Suite*,
+visualizing data provided by UEP.nvim, ULG.nvim, and UCM.nvim.
+
+Main Features:
+- Logical Project Structure:
+  Displays a clean hierarchy based on .uproject (Game, Plugins, Engine modules)
+  without physical folder clutter.
+- VCS Integration:
+  Instantly access pending changes and unpushed commits. Supports Git and
+  Perforce (with auto-checkout).
+- Smart C++ Symbol Outline:
+  Real-time tree of classes, structs, functions, and properties using custom
+  Tree-sitter parsers.
+- Config Explorer:
+  Explore resolved .ini configuration values across layers.
+- Unreal Insights:
+  Visualize profiling data directly in Neovim.
+
+==============================================================================
+2. Usage                                                      *UNX-usage*
+
+All commands for UNX.nvim begin with `:UNX`.
+
+------------------------------------------------------------------------------
+Command List                                           *UNX-commands-list*
+
+:UNX open
+    Open the explorer window.
+:UNX close
+    Close the explorer window.
+:UNX toggle
+    Toggle the explorer window.
+:UNX focus
+    Reveal and focus the current file in the tree.
+:UNX refresh
+    Manually refresh the file tree and VCS status.
+:UNX add_favorites [Scope]
+    Open a picker to add files to Favorites.
+:UNX favorites_files
+    Open a picker to search files within your Favorites.
+:UNX pending_files
+    Open a picker to search files with pending changes.
+:UNX unpushed_files
+    Open a picker to search unpushed files (Git only).
+:UNX favorite_current
+    Add or remove the current file from Favorites.
+
+------------------------------------------------------------------------------
+Keymaps                                                   *UNX-keymaps*
+
+These keymaps are available when the UNX window is focused.
+
+| Key     | Description                                      |
+| :---    | :---                                             |
+| <CR> / o| Open file or toggle directory.                   |
+| <Tab>   | Cycle through Project -> Config -> Insights tabs.|
+| b       | Bookmark: Toggle current item in Favorites.      |
+| /       | Filter: Search and filter the tree by filename.  |
+| D       | Diff: Open a diff view against the VCS base.     |
+| <C-o>   | Open in Editor: Open selection in Unreal Editor. |
+| a       | Add a new C++ class or file.                     |
+| A       | Add a new directory.                             |
+| d       | Delete file or directory.                        |
+| r       | Rename file or directory.                        |
+| m       | Move file or directory.                          |
+| q       | Close the window.                                |
+| R       | Force refresh the tree.                          |
+| f       | Find files recursively under the selected folder.|
+| p       | Toggle parent class display in Symbol view.      |
+
+==============================================================================
+3. Configuration                                       *UNX-configuration*
+
+The configuration for UNX.nvim is managed through the settings system of its
+dependency library, UNL.nvim.
+
+------------------------------------------------------------------------------
+Setup                                                          *UNX-setup*
+
+If you are using `lazy.nvim`, pass a configuration table to the `opts` key. It
+is mandatory to specify `UNL.nvim` and `UEP.nvim` in the `dependencies`.
+
+Example:
+>lua
+  return {
+    'taku25/UNX.nvim',
+    dependencies = {
+       'taku25/UNL.nvim',
+       'taku25/UEP.nvim',
+       'MunifTanjim/nui.nvim',
+       'nvim-tree/nvim-web-devicons',
+    },
+    opts = {
+      window = {
+          position = "left",
+          size = { width = 35 },
+      },
+      -- See Full Configuration for more options
+    },
+  }
+<
+
+------------------------------------------------------------------------------
+Full Configuration                           *UNX-default-configuration*
+
+The following are the default settings for UNX.nvim.
+
+>lua
+{
+    window = {
+        position = "left", -- "left" or "right"
+        size = {
+            width = 35,
+        },
+    },
+    uproject = {
+        show_hidden = false,
+        icon = {
+            expander_open   = "",
+            expander_closed = "",
+            folder_closed   = "",
+            folder_open     = "",
+            default_file    = "",
+            modified        = "[+] ",
+        },
+        -- Icons for VCS Status
+        vcs_icons = {
+            Modified  = "",
+            Added     = "✚",
+            Deleted   = "✖",
+            Renamed   = "➜",
+            Conflict  = "",
+            Untracked = "★",
+            Ignored   = "◌",
+        },
+    },
+    -- Version Control System Settings
+    vcs = {
+        git = { enabled = true },
+        p4 = { 
+            enabled = true,
+            auto_checkout = true, -- Automatically checkout read-only files
+        },
+    },
+    keymaps = {
+        close = { "q" },
+        open = { "<CR>", "o" },
+        vsplit = "s",
+        split = "i",
+        
+        action_add = "a",
+        action_add_directory = "A",
+        action_delete = "d",
+        action_move = "m",
+        action_rename = "r",
+        action_toggle_favorite = "b",
+        action_find_files = "f",
+        action_toggle_parents = "p",
+        action_force_refresh = "R",
+        action_diff = "D",
+        action_open_in_ide = "<C-o>",
+    },
+}
+<
+
+==============================================================================
+4. Features                                                 *UNX-features*
+
+------------------------------------------------------------------------------
+Project Explorer                                     *UNX-feature-project*
+
+The primary view of UNX.nvim. It displays the project structure as defined by
+UEP.nvim, filtering out intermediate and build artifacts.
+It includes special sections for:
+- **Favorites**: Frequently accessed files.
+- **Pending Changes**: Files modified in VCS (Git/Perforce).
+- **Unpushed Commits**: Commits not yet pushed to remote (Git only).
+
+------------------------------------------------------------------------------
+Symbol Outline                                       *UNX-feature-symbols*
+
+When a C++ file is opened, UNX automatically displays a symbol tree in a sub-
+window (if configured). It uses a custom Tree-sitter parser to identify Unreal
+Engine macros like `UCLASS`, `UFUNCTION`, `UPROPERTY` and displays them with
+distinct icons. It separates public, protected, and private members.
+
+------------------------------------------------------------------------------
+Config Explorer                                       *UNX-feature-config*
+
+Accessible via the `<Tab>` key. This view allows you to browse the resolved
+configuration values from `.ini` files. It visualizes the hierarchy of config
+overrides (Base -> Engine -> Project -> Platform -> User).
+
+------------------------------------------------------------------------------
+Insights Integration                                *UNX-feature-insights*
+
+Accessible via the `<Tab>` key. If `ULG.nvim` is installed and connected to a
+trace session, this view displays profiling data, frame timelines, and event
+graphs directly within the editor.
+
+==============================================================================
+5. License                                                *UNX-license*
+
+MIT License
+
+Copyright (c) 2025 taku25
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+==============================================================================
+ vim:tw=78:ts=8:ft=help:norl:
