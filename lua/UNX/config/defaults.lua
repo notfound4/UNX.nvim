@@ -107,6 +107,9 @@ M.defaults = {
         action_find_files = "f",
         action_toggle_parents = "p",
         action_force_refresh = "R",
+        action_diff = "D",
+        
+        custom = {},
   },
 }
 

@@ -187,4 +187,29 @@ function M.get_unpushed()
     return git_unpushed_cache or {}
 end
 
+function M.get_file_content(path, on_success)
+    if not path then return on_success(nil) end
+    
+    local found = vim.fs.find(".git", { path = path, upward = true, type = "directory" })
+    if #found == 0 then
+        found = vim.fs.find(".git", { path = path, upward = true, type = "file" })
+    end
+    if #found == 0 then
+        if on_complete then on_complete(nil) end
+        return
+    end
+
+    local git_dir = found[1]
+    local git_root = vim.fn.fnamemodify(git_dir, ":h")
+    local root_norm = unl_path.normalize(git_root)
+    local path_norm = unl_path.normalize(path)
+    
+    -- Replace absolute path with relative path
+    -- Escape special characters in pattern is handled by string.len usually, 
+    -- but here we assume simple prefix removal.
+    local rel_path = path_norm:sub(#root_norm + 2) -- +2 for slash and 1-based index adjustment
+
+    spawn_git({"show", "HEAD:" .. rel_path}, git_root, on_success)
+end
+
 return M

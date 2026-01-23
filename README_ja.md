@@ -143,7 +143,8 @@ opts = {
         action_delete = "d",         -- 削除
         action_move = "m",           -- 移動
         action_rename = "r",         -- リネーム
-        action_toggle_favorite = "b" -- お気に入りトグル
+        action_toggle_favorite = "b", -- お気に入りトグル
+        action_diff = "D"            -- Diff (VCS比較)
     },
 }
 ```
@@ -165,6 +166,7 @@ opts = {
 | `<CR>` / `o` | ファイルを開く / フォルダの開閉。 |
 | `<Tab>` | **Project** -\> **Config** -\> **Insights** タブを切り替え。 |
 | `b` | **Bookmark**: カーソル下の項目をお気に入りに追加/解除します。 |
+| `D` | **Diff**: バージョン管理システムのベースリビジョンとの差分を表示します。 |
 | `a` | 新しいC++クラスまたはファイルを追加 (`UCM`と連携して`.generated.h`などを考慮)。 |
 | `A` | 新しいディレクトリを追加。 |
 | `d` | ファイルまたはディレクトリを削除 (お気に入り項目の場合はリストから解除)。 |

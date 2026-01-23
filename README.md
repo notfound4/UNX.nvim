@@ -143,7 +143,8 @@ opts = {
         action_delete = "d",         -- Delete
         action_move = "m",           -- Move
         action_rename = "r",         -- Rename
-        action_toggle_favorite = "b" -- Toggle Favorite (Bookmark)
+        action_toggle_favorite = "b", -- Toggle Favorite (Bookmark)
+        action_diff = "D"            -- Diff against base (VCS)
     },
 }
 ```
@@ -165,6 +166,7 @@ opts = {
 | `<CR>` / `o` | Open file or toggle directory. |
 | `<Tab>` | Cycle through **Project** -\> **Config** -\> **Insights** tabs. |
 | `b` | **Bookmark**: Toggle the current item in the "Favorites" list. |
+| `D` | **Diff**: Open a diff view against the VCS base version. |
 | `a` | Add a new C++ class or file (Integrates with `UCM` for templates). |
 | `A` | Add a new directory. |
 | `d` | Delete file or directory (Removes from Favorites if used on a bookmark). |

@@ -8,6 +8,7 @@ local unl_context = require("UNL.context") -- Added
 local fs = require("vim.fs")
 local utils = require("UNX.common.utils")
 local file_actions = require("UNX.ui.view.action.files")
+local diff_action = require("UNX.ui.view.action.diff")
 local unl_open = require("UNL.buf.open")
 local unl_path = require("UNL.path")
 local unx_vcs = require("UNX.vcs")
@@ -674,6 +675,22 @@ function M.create(bufnr, winid)
 
     if keys.action_force_refresh then
         vim.keymap.set("n", keys.action_force_refresh, function() file_actions.refresh(active_tree) end, map_opts)
+    end
+    
+    if keys.action_diff then
+        vim.keymap.set("n", keys.action_diff, function() diff_action.diff(active_tree) end, map_opts)
+    end
+
+    if keys.custom then
+        for key, func in pairs(keys.custom) do
+            vim.keymap.set("n", key, function() 
+                if type(func) == "function" then
+                    func(active_tree)
+                elseif type(func) == "string" then
+                    vim.cmd(func)
+                end
+            end, map_opts)
+        end
     end
 
     return active_tree

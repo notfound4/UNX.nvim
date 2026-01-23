@@ -146,4 +146,34 @@ function M.p4_revert(path)
     return p4 and p4.revert(path) or false
 end
 
+function M.get_file_content(path, on_success)
+    local conf = get_config()
+    local index = 1
+    
+    local function try_next()
+        if index > #providers then
+            on_success(nil)
+            return
+        end
+        
+        local provider = providers[index]
+        index = index + 1
+        local cfg = conf[provider.name]
+        
+        if cfg and cfg.enabled ~= false and type(provider.module.get_file_content) == "function" then
+            provider.module.get_file_content(path, function(content)
+                if content then
+                    on_success(content)
+                else
+                    try_next()
+                end
+            end)
+        else
+            try_next()
+        end
+    end
+    
+    try_next()
+end
+
 return M
