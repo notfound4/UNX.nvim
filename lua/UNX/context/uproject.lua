@@ -9,10 +9,13 @@ local DATA_KEY = "state"
 
 local default_state = {
     mode = "normal",      -- "uep" | "none" | "normal"
-    project_root = nil,   -- 文字列 (パス)
-    engine_root = nil,    -- 文字列 (パス)
+    project_root = nil,   -- "C:/Work/MyProject"
+    engine_root = nil,    -- "C:/UE_5.3/Engine"
     is_pending_expanded = true,
+    is_favorites_expanded = true,
+    filter_text = "",     -- ★追加: フィルタリング用テキスト
 }
+
 
 local function get_store_handle()
     -- 1. 安全に require (UNLがロードされていない場合の対策)
@@ -56,12 +59,14 @@ function M.set(data)
     if handle and type(handle.set) == "function" then
         -- 必要なデータフィールドだけを保存する（念の為のフィルタリング）
         -- ここで UIオブジェクトなどが混入するのを防ぐことができます
-        local clean_data = {
-            mode = data.mode,
-            project_root = data.project_root,
-            engine_root = data.engine_root,
-            is_pending_expanded = data.is_pending_expanded,
-        }
+    local clean_data = {
+        mode = data.mode,
+        project_root = data.project_root,
+        engine_root = data.engine_root,
+        is_pending_expanded = data.is_pending_expanded,
+        is_favorites_expanded = data.is_favorites_expanded,
+        filter_text = data.filter_text, -- ★追加
+    }
         handle:set(DATA_KEY, clean_data)
     end
 end

@@ -9,6 +9,7 @@ local fs = require("vim.fs")
 local utils = require("UNX.common.utils")
 local file_actions = require("UNX.ui.view.action.files")
 local diff_action = require("UNX.ui.view.action.diff")
+local filter_action = require("UNX.ui.view.action.filter") -- ★追加
 local unl_open = require("UNL.buf.open")
 local unl_path = require("UNL.path")
 local unx_vcs = require("UNX.vcs")
@@ -16,7 +17,7 @@ local ctx_uproject = require("UNX.context.uproject")
 
 -- ビューロジックの読み込み
 local PendingView = require("UNX.ui.view.uproject.pending")
-local FavoritesView = require("UNX.ui.view.uproject.favorites") -- ★追加
+local FavoritesView = require("UNX.ui.view.uproject.favorites") 
 
 local unl_events_ok, unl_events = pcall(require, "UNL.event.events")
 local unl_types_ok, unl_event_types = pcall(require, "UNL.event.types")
@@ -218,7 +219,139 @@ function M.save_tree_state()
     end))
 end
 
+-- ======================================================
+-- HELPER: Filtering & Tree Construction
+-- ======================================================
 
+local function paths_to_tree_nodes(file_items, root_path)
+    if not file_items or #file_items == 0 then return {} end
+    
+    local root_len = #root_path
+    local dir_map = {} -- path -> { node, children_map }
+    local root_nodes = {}
+    
+    -- Normalize root path ensuring no trailing slash for consistency
+    if root_path:sub(-1) == "/" then root_path = root_path:sub(1, -2) end
+    
+    -- Function to get or create directory node
+    local function get_or_create_dir(dir_path)
+        if dir_path == root_path or #dir_path <= root_len then return nil end
+        if dir_map[dir_path] then return dir_map[dir_path] end
+        
+        local parent_path = vim.fn.fnamemodify(dir_path, ":h")
+        local dir_name = vim.fn.fnamemodify(dir_path, ":t")
+        
+        local node = Tree.Node({
+            text = dir_name,
+            id = unl_path.normalize(dir_path),
+            path = dir_path,
+            type = "directory",
+            _has_children = true,
+        })
+        node:expand() -- Expand all directories in filtered view
+        
+        local entry = { node = node, children = {} }
+        dir_map[dir_path] = entry
+        
+        local parent_entry = get_or_create_dir(parent_path)
+        if parent_entry then
+            table.insert(parent_entry.children, node)
+        else
+            -- Top level relative to root
+            table.insert(root_nodes, node)
+        end
+        
+        return entry
+    end
+
+    for _, item in ipairs(file_items) do
+        if item.type ~= "directory" then
+            local path = item.path
+            local parent_path = vim.fn.fnamemodify(path, ":h")
+            
+            -- Ensure parent directories exist
+            local parent_entry = get_or_create_dir(parent_path)
+            
+            local file_node = Tree.Node({
+                text = item.display or vim.fn.fnamemodify(path, ":t"),
+                id = item.path,
+                path = item.path,
+                type = "file",
+                _has_children = false,
+            })
+            
+            if parent_entry then
+                table.insert(parent_entry.children, file_node)
+            else
+                -- File at root
+                table.insert(root_nodes, file_node)
+            end
+        end
+    end
+    
+    -- Recursive function to set children on nodes
+    local function attach_children(nodes)
+        for _, node in ipairs(nodes) do
+            if node.type == "directory" then
+                local entry = dir_map[node.path]
+                if entry and #entry.children > 0 then
+                    attach_children(entry.children)
+                    -- Sort children: directories first, then files
+                    table.sort(entry.children, function(a, b)
+                        if a.type == b.type then return a.text < b.text end
+                        return a.type == "directory"
+                    end)
+                    -- NUI Tree Node doesn't support setting children directly after init easily in this structure?
+                    -- Actually Tree.Node(props, children) works.
+                    -- But we created nodes already. We need to construct Tree.Node with children.
+                end
+            end
+        end
+    end
+    
+    -- Re-create nodes with children structure properly
+    local function build_nui_hierarchy(nodes_list)
+        local nui_list = {}
+        -- Sort current level
+        table.sort(nodes_list, function(a, b)
+            if a.type == b.type then return a.text < b.text end
+            return a.type == "directory"
+        end)
+        
+        for _, node_data in ipairs(nodes_list) do
+            local children = nil
+            if node_data.type == "directory" then
+                local entry = dir_map[node_data.path]
+                if entry and #entry.children > 0 then
+                    children = build_nui_hierarchy(entry.children)
+                end
+            end
+            
+            -- Create a new node with children attached
+            local final_node = Tree.Node({
+                text = node_data.text,
+                id = node_data.id,
+                path = node_data.path,
+                type = node_data.type,
+                _has_children = (children ~= nil),
+            }, children)
+            
+            if final_node:has_children() then final_node:expand() end
+            
+            table.insert(nui_list, final_node)
+        end
+        return nui_list
+    end
+
+    return build_nui_hierarchy(root_nodes)
+end
+
+local function filter_nodes(nodes, filter_text)
+    -- Placeholder for non-UEP filtering (e.g. Pending/Favorites)
+    -- This needs to traverse NUI nodes which is hard if they don't have children exposed in a standard table.
+    -- Assuming this is used for simple lists for now.
+    return nodes
+end
 
 -- ======================================================
 
@@ -237,6 +370,135 @@ local function fetch_root_data(skip_vcs_refresh)
     -- プロジェクトルートの検出 (UEPに依存せずUNL.finderを使用)
     local project_info = unl_finder.project.find_project(cwd)
     local ctx = ctx_uproject.get()
+    
+    -- ★★★ FILTERING LOGIC ★★★
+    if ctx.filter_text and ctx.filter_text ~= "" then
+        local filter = ctx.filter_text:lower()
+        
+        unl_api.provider.request("uep.get_project_items", { 
+            scope = "full", 
+            deps_flag = "--deep-deps" 
+        }, function(ok, items)
+            local nodes = {}
+            -- 1. Header
+            table.insert(nodes, Tree.Node({
+                text = "Search: " .. ctx.filter_text .. " (Press / to clear)",
+                id = "filter_header",
+                kind = "Info",
+                type = "info",
+                _has_children = false,
+            }))
+
+            -- 2. Favorites (Filtered)
+            local fav_items = require("UNX.cache.favorites").load()
+            local filtered_favs = {}
+            for _, item in ipairs(fav_items) do
+                if item.path:lower():find(filter, 1, true) or (item.name and item.name:lower():find(filter, 1, true)) then
+                    table.insert(filtered_favs, item)
+                end
+            end
+            if #filtered_favs > 0 then
+                local fav_children = {}
+                for _, item in ipairs(filtered_favs) do
+                    table.insert(fav_children, Tree.Node({
+                        text = item.name or vim.fn.fnamemodify(item.path, ":t"),
+                        id = "fav_" .. unl_path.normalize(item.path),
+                        path = item.path,
+                        type = "file",
+                        _has_children = false,
+                        extra = { uep_type = "fs", is_favorite_item = true }
+                    }))
+                end
+                local fav_root = Tree.Node({
+                    text = "Favorites (Filtered)",
+                    id = "root_favorites",
+                    type = "directory",
+                    _has_children = true,
+                    extra = { uep_type = FavoritesView.ROOT_TYPE }
+                }, fav_children)
+                fav_root:expand()
+                table.insert(nodes, fav_root)
+            end
+
+            -- 3. Pending Changes (Filtered)
+            local changes = unx_vcs.get_aggregated_changes()
+            local filtered_changes = {}
+            for _, item in ipairs(changes) do
+                if item.path:lower():find(filter, 1, true) then
+                    table.insert(filtered_changes, item)
+                end
+            end
+            if #filtered_changes > 0 then
+                local change_children = {}
+                for _, item in ipairs(filtered_changes) do
+                    table.insert(change_children, Tree.Node({
+                        text = vim.fn.fnamemodify(item.path, ":t"),
+                        id = "pending_vcs_" .. unl_path.normalize(item.path),
+                        path = item.path,
+                        type = "file",
+                        _has_children = false,
+                        extra = { uep_type = "fs", is_pending_item = true }
+                    }))
+                end
+                local pend_root = Tree.Node({
+                    text = "Pending Changes (Filtered)",
+                    id = "root_pending_changes",
+                    type = "directory",
+                    _has_children = true,
+                    extra = { uep_type = PendingView.ROOT_TYPE_PENDING }
+                }, change_children)
+                pend_root:expand()
+                table.insert(nodes, pend_root)
+            end
+
+            -- 4. Main Project Tree (Filtered & Hierarchical)
+            if ok and items then
+                local filtered_items = {}
+                for _, item in ipairs(items) do
+                    if item.type ~= "directory" then
+                        if item.path:lower():find(filter, 1, true) then
+                             table.insert(filtered_items, item)
+                        end
+                    end
+                end
+                
+                if #filtered_items > 0 then
+                    -- Build hierarchy
+                    local hierarchy_nodes = paths_to_tree_nodes(filtered_items, project_info.root)
+                    
+                    -- Wrap in Project Root node to keep it clean? 
+                    -- Or just append root nodes? 
+                    -- Let's append root nodes directly to mimic file view, 
+                    -- or better: put them under a "Search Results" or just "Project Name" node.
+                    
+                    local proj_root = Tree.Node({
+                        text = vim.fn.fnamemodify(project_info.root, ":t") .. " (Results)",
+                        id = unl_path.normalize(project_info.root),
+                        path = project_info.root,
+                        type = "directory",
+                        _has_children = true,
+                        extra = { uep_type = "fs" }
+                    }, hierarchy_nodes)
+                    proj_root:expand()
+                    table.insert(nodes, proj_root)
+                else
+                    table.insert(nodes, Tree.Node({ text = "No matching files in project.", kind="Info", id="no_match_main" }))
+                end
+            else
+                table.insert(nodes, Tree.Node({ text = "Failed to fetch file list.", kind="Info", id="error" }))
+            end
+            
+            vim.schedule(function()
+                if active_tree and vim.api.nvim_buf_is_valid(active_tree.bufnr) then
+                     active_tree:set_nodes(nodes)
+                     active_tree:render()
+                end
+            end)
+        end)
+        
+        return { Tree.Node({ text = "Searching: " .. ctx.filter_text .. "...", kind = "Info", id = "loading" }) }
+    end
+    -- ★★★ END FILTERING LOGIC ★★★
     
     if project_info then
         ctx.mode = "uep" -- 便宜上UEPモードとするが、実質はファイルシステムモード
@@ -683,6 +945,9 @@ function M.create(bufnr, winid)
     if keys.action_open_in_ide then
         vim.keymap.set("n", keys.action_open_in_ide, function() file_actions.open_in_ide(active_tree) end, map_opts)
     end
+    
+    -- Filter Keymap
+    vim.keymap.set("n", "/", function() filter_action.start_filter(active_tree) end, map_opts)
 
     -- Custom Keymaps
 

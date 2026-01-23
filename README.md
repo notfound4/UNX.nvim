@@ -168,6 +168,7 @@ opts = {
 | `<C-o>` | **Open in Editor**: Open the selected file in the Unreal Editor. |
 | `<Tab>` | Cycle through **Project** -\> **Config** -\> **Insights** tabs. |
 | `b` | **Bookmark**: Toggle the current item in the "Favorites" list. |
+| `/` | **Filter**: Search and filter the tree by filename (maintains hierarchy). |
 | `D` | **Diff**: Open a diff view against the VCS base version. |
 | `a` | Add a new C++ class or file (Integrates with `UCM` for templates). |
 | `A` | Add a new directory. |
