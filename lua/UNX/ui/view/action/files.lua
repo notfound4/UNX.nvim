@@ -284,7 +284,10 @@ function M.toggle_favorite(tree)
     local path = sanitize_path(node.path)
     if not path then return end
     
-    local added, msg = favorites_cache.toggle(path)
+    local ctx = require("UNX.context.uproject").get()
+    local project_root = ctx.project_root or require("UNL.finder").project.find_project_root(vim.loop.cwd())
+    
+    local added, msg = favorites_cache.toggle(path, project_root)
     local icon = added and "★ " or "☆ "
     -- ★修正
     logger.get().info(icon .. msg .. ": " .. vim.fn.fnamemodify(path, ":t"))
@@ -311,26 +314,22 @@ function M.find_files_recursive(tree)
     local prefix = unl_path.normalize(target_dir)
     if prefix:sub(-1) ~= "/" then prefix = prefix .. "/" end
 
-    unl_api.provider.request("uep.get_project_items", { 
-        scope = "full",
-        deps_flag = "--deep-deps" -- 必要に応じてこちらもファイルスキャンに切り替えることも検討
-    }, function(ok, items)
-        if not ok or not items then
-            -- ★修正
-            return logger.get().error("Failed to get file list from UEP.")
+    -- Use UNL API instead of UEP provider
+    require("UNL.api").db.search_files_by_path_part(dir_name, function(items)
+        if not items then
+            return logger.get().error("Failed to get file list from UNL Server.")
         end
 
         local filtered_items = {}
-        for _, item in ipairs(items) do
-            if item.type ~= "directory" then
-                local item_path = unl_path.normalize(item.path)
-                if item_path:find(prefix, 1, true) == 1 then
-                    table.insert(filtered_items, {
-                        display = item.display,
-                        value = item.path,
-                        filename = item.path,
-                    })
-                end
+        for _, item in ipairs(items or {}) do
+            local item_path = unl_path.normalize(item.path)
+            -- Verify it's actually under the target directory
+            if item_path:find(prefix, 1, true) == 1 then
+                table.insert(filtered_items, {
+                    display = item.filename,
+                    value = item.path,
+                    filename = item.path,
+                })
             end
         end
 

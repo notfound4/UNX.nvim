@@ -47,9 +47,10 @@ function M.get()
         handle:set(DATA_KEY, data)
     end
 
-    if data.is_pending_expanded == nil then
-        data.is_pending_expanded = true
-    end
+    -- Ensure defaults
+    if data.is_pending_expanded == nil then data.is_pending_expanded = true end
+    if data.pending_states == nil then data.pending_states = {} end
+    
     return data
 end
 
@@ -57,19 +58,15 @@ function M.set(data)
     local handle = get_store_handle()
     if handle and type(handle.set) == "function" then
         -- 必要なデータフィールドだけを保存する（念の為のフィルタリング）
-        -- ここで UIオブジェクトなどが混入するのを防ぐことができます
         local clean_data = {
             mode = data.mode,
             project_root = data.project_root,
             engine_root = data.engine_root,
             is_pending_expanded = data.is_pending_expanded,
             is_favorites_expanded = data.is_favorites_expanded,
-            filter_text = data.filter_text, -- ★追加
+            filter_text = data.filter_text,
+            pending_states = data.pending_states or {}, -- 確実に保存
         }
-
-        if data.pending_states ~= nil then
-            clean_data.pending_states = data.pending_states
-        end
 
         handle:set(DATA_KEY, clean_data)
     end

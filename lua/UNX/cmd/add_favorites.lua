@@ -1,7 +1,7 @@
+local unl_api = require("UNL.api")
 local unl_picker = require("UNL.backend.picker")
 local favorites_cache = require("UNX.cache.favorites")
 local unl_path = require("UNL.path")
-local unl_api = require("UNL.api")
 local unx_config = require("UNX.config")
 
 local M = {}
@@ -9,36 +9,24 @@ local M = {}
 function M.execute(opts)
   opts = opts or {}
   
-  local request_scope = opts.scope or "full"
-  local request_deps = opts.deps_flag or "--deep-deps"
-
-  -- UEPからファイルリスト（表示用整形済み）を取得
-  unl_api.provider.request("uep.get_project_items", { 
-      scope = request_scope,
-      deps_flag = request_deps
-  }, function(ok, items)
-      
-      if not ok or not items or #items == 0 then
-          local msg = type(items) == "string" and items or "No files found in UEP cache. Run :UEP refresh."
-          return vim.notify("Favorites Add Error: " .. msg, vim.log.levels.WARN)
+  -- Use UNL Server to get all files
+  unl_api.db.get_all_file_paths(function(paths)
+      if not paths or #paths == 0 then
+          return vim.notify("No files found in UNL Server DB. Run :UNL refresh.", vim.log.levels.WARN)
       end
       
       local picker_items = {}
-      for _, item in ipairs(items) do
-          -- UEP側で作られた display をそのまま使う (高速)
-          local display_text = item.display or item.path
-          
+      for _, path in ipairs(paths) do
           table.insert(picker_items, {
-              display = display_text, 
-              value = item.path,
-              filename = item.path, 
+              display = vim.fn.fnamemodify(path, ":."), 
+              value = path,
+              filename = path, 
           })
       end
       
-      local title = string.format("Add to Favorites (UEP: %s)", request_scope)
+      local title = "Add to Favorites (UNL Server)"
 
-      unl_picker.pick({
-        kind = "unx_favorites_add",
+      unl_picker.pick({        kind = "unx_favorites_add",
         title = title,
         items = picker_items,
         conf = unx_config.get(),
@@ -51,7 +39,8 @@ function M.execute(opts)
           local targets = (type(selections) == "table" and selections) or { selections }
           
           local count = 0
-          local current_list = favorites_cache.load()
+          local project_root = require("UNL.finder").project.find_project_root(vim.loop.cwd())
+          local current_list = favorites_cache.load(project_root)
           
           for _, sel in ipairs(targets) do
              local path = (type(sel) == "table" and sel.value) or sel
@@ -62,7 +51,7 @@ function M.execute(opts)
              end
              
              if not exists then
-                 favorites_cache.toggle(path)
+                 favorites_cache.toggle(path, project_root)
                  count = count + 1
              end
           end

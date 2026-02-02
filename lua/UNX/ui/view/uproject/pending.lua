@@ -73,10 +73,14 @@ function M.create_root_nodes(is_expanded_map)
             id = "root_pending_changes",
             type = "directory",
             _has_children = true,
-            extra = { uep_type = M.ROOT_TYPE_PENDING }
+            extra = { uep_type = M.ROOT_TYPE_PENDING },
+            -- is_expanded = is_exp -- REMOVED
         }, children)
         
-        if is_exp then node:expand() else node:collapse() end
+        if is_exp then
+            node:expand()
+        end
+        
         table.insert(nodes, node)
     end
 
@@ -97,10 +101,14 @@ function M.create_root_nodes(is_expanded_map)
             id = "root_unpushed_commits",
             type = "directory",
             _has_children = true,
-            extra = { uep_type = M.ROOT_TYPE_UNPUSHED }
+            extra = { uep_type = M.ROOT_TYPE_UNPUSHED },
+            -- is_expanded = is_exp -- REMOVED
         }, children)
 
-        if is_exp then node:expand() else node:collapse() end
+        if is_exp then
+            node:expand()
+        end
+
         table.insert(nodes, node)
     end
     

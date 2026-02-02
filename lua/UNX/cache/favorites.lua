@@ -10,13 +10,12 @@ local M = {}
 local CACHE_FILENAME_SUFFIX = "_favorites.json"
 
 -- プロジェクト固有のキャッシュパスを取得
-local function get_cache_path()
-  -- 1. 現在のディレクトリからプロジェクトルートを特定
-  local project_root = unl_finder.project.find_project_root(vim.loop.cwd())
+local function get_cache_path(project_root)
+  -- 1. 指定がなければ現在のディレクトリからプロジェクトルートを特定
+  project_root = project_root or unl_finder.project.find_project_root(vim.loop.cwd())
   if not project_root then return nil end
 
-  -- 2. プロジェクトルートのパスをユニークな文字列に変換 (スラッシュなどを置換)
-  -- 例: C:/Projects/MyGame -> C__Projects_MyGame
+  -- 2. プロジェクトルートのパスをユニークな文字列に変換
   local safe_project_name = unl_path.normalize(project_root):gsub("[\\/:]", "_")
   
   -- 3. UNXの設定からキャッシュディレクトリを取得
@@ -27,8 +26,8 @@ local function get_cache_path()
   return fs.joinpath(base_dir, safe_project_name .. CACHE_FILENAME_SUFFIX)
 end
 
-function M.load()
-  local path = get_cache_path()
+function M.load(project_root)
+  local path = get_cache_path(project_root)
   if not path or vim.fn.filereadable(path) == 0 then
     return {}
   end
@@ -36,8 +35,8 @@ function M.load()
   return data or {}
 end
 
-function M.save(data)
-  local path = get_cache_path()
+function M.save(data, project_root)
+  local path = get_cache_path(project_root)
   if not path then return false end
   
   vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
@@ -45,10 +44,10 @@ function M.save(data)
 end
 
 --- トグル機能: 既にあれば削除、なければ追加
-function M.toggle(target_path)
+function M.toggle(target_path, project_root)
   if not target_path or target_path == "" then return false, "Invalid path" end
   
-  local favorites = M.load()
+  local favorites = M.load(project_root)
   local found_idx = nil
   local norm_target = unl_path.normalize(target_path)
 
@@ -62,7 +61,7 @@ function M.toggle(target_path)
 
   if found_idx then
     table.remove(favorites, found_idx)
-    M.save(favorites)
+    M.save(favorites, project_root)
     return false, "Removed from Favorites"
   else
     table.insert(favorites, {
@@ -70,7 +69,7 @@ function M.toggle(target_path)
       name = vim.fn.fnamemodify(target_path, ":t"),
       added_at = os.time()
     })
-    M.save(favorites)
+    M.save(favorites, project_root)
     return true, "Added to Favorites"
   end
 end
