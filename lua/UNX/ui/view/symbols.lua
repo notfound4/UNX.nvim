@@ -48,11 +48,14 @@ local function prepare_node(node)
     elseif node.kind == "Info" then icon = " "; icon_hl = "Comment"
     end
     
-    line:append(icon, icon_hl)
-    line:append(node.text, text_hl)
+    local text = tostring(node.text or "Unknown"):gsub("[\r\n]+", " ")
+    local detail = node.detail and tostring(node.detail):gsub("[\r\n]+", " ") or ""
     
-    if node.detail and node.detail ~= "" then
-        line:append(node.detail, "Comment")
+    line:append(tostring(icon or " "), icon_hl or "Normal")
+    line:append(text, text_hl or "Normal")
+    
+    if detail ~= "" then
+        line:append(detail, "Comment")
     end
 
     return line
@@ -243,22 +246,27 @@ function M.on_node_action(tree_instance, split_instance, other_split_instance)
     if node.kind == "BaseClass" and node.lazy_load then
         if node:is_expanded() then
             node:collapse()
+            tree_instance:render()
         else
             if not node:has_children() then
                  logger.get().debug("Lazy loading base class: " .. node.text)
                  
-                 local children = SymbolParser.parse_and_get_children(node.file_path, node.text)
-                 
-                 if children and #children > 0 then
-                     tree_instance:set_nodes(children, node:get_id())
-                     node.lazy_load = false
-                 else
-                     logger.get().warn("No symbols found in base class.")
-                 end
+                 -- ★非同期に変更
+                 SymbolParser.parse_and_get_children(node.file_path, node.text, function(children)
+                     if children and #children > 0 then
+                         tree_instance:set_nodes(children, node:get_id())
+                         node.lazy_load = false
+                     else
+                         logger.get().warn("No symbols found in base class.")
+                     end
+                     node:expand()
+                     tree_instance:render()
+                 end)
+            else
+                 node:expand()
+                 tree_instance:render()
             end
-            node:expand()
         end
-        tree_instance:render()
         return
     end
 

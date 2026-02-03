@@ -187,71 +187,76 @@ function M.build_from_context(context, on_complete)
     end
 
     if current_info and current_info.header then
-        local ok, res = unl_api.provider.request("ucm.get_file_symbols", {
+        -- ★非同期に変更
+        unl_api.provider.request("ucm.get_file_symbols", {
             file_path = current_info.header
-        })
-        if ok and res and type(res) == "table" then
-            process_symbols(res)
-        else
-            if on_complete then on_complete(root_nodes) end
-        end
+        }, function(ok, res)
+            if ok and res and type(res) == "table" then
+                process_symbols(res)
+            else
+                if on_complete then on_complete(root_nodes) end
+            end
+        end)
     else
         if on_complete then on_complete(root_nodes) end
     end
 end
 
 function M.fetch_and_build(file_path, on_complete)
-    local ok, symbols = unl_api.provider.request("ucm.get_file_symbols", {
+    -- ★非同期に変更
+    unl_api.provider.request("ucm.get_file_symbols", {
         file_path = file_path
-    })
+    }, function(ok, symbols)
+        local function process(data)
+            if type(data) ~= "table" then data = {} end
 
-    local function process(data)
-        if type(data) ~= "table" then data = {} end
+            local registry = IDRegistry.new()
+            local seen_ids = {}
+            local nodes = {}
 
-        local registry = IDRegistry.new()
-        local seen_ids = {}
-        local nodes = {}
-
-        for _, item in ipairs(data) do
-            if item.kind == "UClass" or item.kind == "Class" or item.kind == "UStruct" or item.kind == "Struct" then
-                local node = build_class_node(item, registry, seen_ids, true)
-                table.insert(nodes, node)
-            else
-                local id = safe_node_id(registry:get(item.name .. item.line), seen_ids)
-                table.insert(nodes, Tree.Node({
-                    text = item.name,
-                    kind = item.kind,
-                    line = item.line,
-                    file_path = item.file_path,
-                    id = id
-                }))
+            for _, item in ipairs(data) do
+                if item.kind == "UClass" or item.kind == "Class" or item.kind == "UStruct" or item.kind == "Struct" then
+                    local node = build_class_node(item, registry, seen_ids, true)
+                    table.insert(nodes, node)
+                else
+                    local id = safe_node_id(registry:get(item.name .. item.line), seen_ids)
+                    table.insert(nodes, Tree.Node({
+                        text = item.name,
+                        kind = item.kind,
+                        line = item.line,
+                        file_path = item.file_path,
+                        id = id
+                    }))
+                end
             end
+            if on_complete then on_complete(nodes) end
         end
-        if on_complete then on_complete(nodes) end
-    end
 
-    if ok and symbols and type(symbols) == "table" then
-        process(symbols)
-    else
-        process({})
-    end
+        if ok and symbols and type(symbols) == "table" then
+            process(symbols)
+        else
+            process({})
+        end
+    end)
 end
 
-function M.parse_and_get_children(file_path, class_name)
-    local ok, symbols = unl_api.provider.request("ucm.get_file_symbols", { file_path = file_path })
-    
-    if ok and symbols and type(symbols) == "table" then
-        local registry = IDRegistry.new()
-        local seen = {}
-        
-        for _, item in ipairs(symbols) do
-            if item.name == class_name then
-                local _, children = build_class_node(item, registry, seen, true)
-                return children or {}
+function M.parse_and_get_children(file_path, class_name, on_complete)
+    -- ★非同期に変更
+    unl_api.provider.request("ucm.get_file_symbols", { file_path = file_path }, function(ok, symbols)
+        if ok and symbols and type(symbols) == "table" then
+            local registry = IDRegistry.new()
+            local seen = {}
+            
+            for _, item in ipairs(symbols) do
+                if item.name == class_name then
+                    local _, children = build_class_node(item, registry, seen, true)
+                    if on_complete then on_complete(children or {}) end
+                    return
+                end
             end
         end
-    end
-    return {}
+        if on_complete then on_complete({}) end
+    end)
 end
 
 return M
