@@ -41,7 +41,7 @@ function M.refresh(root_path, on_complete)
     for _, provider in ipairs(providers) do
         local cfg = conf[provider.name]
         if cfg and cfg.enabled ~= false then
-            provider.module.refresh(root_path, check_done)
+            provider.module.refresh(root_path, check_done, "UNX")
         end
     end
 end
@@ -123,11 +123,11 @@ function M.is_p4_managed(path)
 end
 
 function M.p4_edit(path)
-    return unl_vcs.p4_edit(path)
+    return unl_vcs.p4_edit(path, "UNX")
 end
 
 function M.p4_revert(path)
-    return unl_vcs.p4_revert(path)
+    return unl_vcs.p4_revert(path, "UNX")
 end
 
 function M.get_file_content(path, on_success)
