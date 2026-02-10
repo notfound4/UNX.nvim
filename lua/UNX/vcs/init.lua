@@ -1,10 +1,11 @@
 -- lua/UNX/vcs/init.lua
 local M = {}
+local unl_vcs = require("UNL.vcs")
 
--- VCSプロバイダーの定義 (優先順位順: P4 -> Git)
+-- VCSプロバイダーの定義 (UNL.vcs の各モジュールを直接参照)
 local providers = {
-    { name = "p4",  module = require("UNX.vcs.p4") },
-    { name = "git", module = require("UNX.vcs.git") },
+    { name = "p4",  module = require("UNL.vcs.p4") },
+    { name = "git", module = require("UNL.vcs.git") },
 }
 
 --- 設定を取得するヘルパー
@@ -69,7 +70,7 @@ function M.get_aggregated_changes()
     return combined
 end
 
--- ★★★ 追加: 全ての未プッシュファイルをマージして返す (Remote Diff) ★★★
+--- 全ての未プッシュファイルをマージして返す (Remote Diff)
 function M.get_aggregated_unpushed()
     local conf = get_config()
     local combined = {}
@@ -77,7 +78,6 @@ function M.get_aggregated_unpushed()
 
     for _, provider in ipairs(providers) do
         local cfg = conf[provider.name]
-        -- get_unpushed を実装しているプロバイダーのみ (現在はGitのみ)
         if cfg and cfg.enabled ~= false and type(provider.module.get_unpushed) == "function" then
             local changes = provider.module.get_unpushed()
             
@@ -93,7 +93,6 @@ function M.get_aggregated_unpushed()
     table.sort(combined, function(a, b) return a.path < b.path end)
     return combined
 end
--- ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
 
 --- パスのVCSステータスを取得する
 function M.get_status(path)
@@ -114,36 +113,21 @@ end
 
 --- 全プロバイダーのキャッシュをクリア
 function M.clear()
-    for _, provider in ipairs(providers) do
-        if type(provider.module.clear) == "function" then
-            provider.module.clear()
-        end
-    end
-end
-
--- P4 Helpers
-local function get_p4_module()
-    for _, p in ipairs(providers) do
-        if p.name == "p4" then return p.module end
-    end
-    return nil
+    unl_vcs.clear()
 end
 
 function M.is_p4_managed(path)
     local conf = get_config()
     if not conf.p4 or conf.p4.enabled == false then return false end
-    local p4 = get_p4_module()
-    return p4 and p4.is_managed(path) or false
+    return unl_vcs.is_p4_managed(path)
 end
 
 function M.p4_edit(path)
-    local p4 = get_p4_module()
-    return p4 and p4.edit(path) or false
+    return unl_vcs.p4_edit(path)
 end
 
 function M.p4_revert(path)
-    local p4 = get_p4_module()
-    return p4 and p4.revert(path) or false
+    return unl_vcs.p4_revert(path)
 end
 
 function M.get_file_content(path, on_success)
