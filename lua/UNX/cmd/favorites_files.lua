@@ -1,4 +1,4 @@
-local unl_picker = require("UNL.backend.picker")
+local unl_picker = require("UNL.picker")
 local favorites_cache = require("UNX.cache.favorites")
 local unx_config = require("UNX.config")
 local unl_buf_open = require("UNL.buf.open")
@@ -97,7 +97,7 @@ function M.execute(opts)
 
       table.sort(filtered_items, function(a, b) return a.display < b.display end)
 
-      unl_picker.pick({
+      unl_picker.open({
         kind = "unx_favorites_all",
         title = "Favorites (All Files)",
         items = filtered_items,
@@ -115,3 +115,4 @@ function M.execute(opts)
 end
 
 return M
+

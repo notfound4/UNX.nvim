@@ -1,4 +1,4 @@
-local unl_picker = require("UNL.backend.picker")
+local unl_picker = require("UNL.picker")
 local unx_config = require("UNX.config")
 local unl_buf_open = require("UNL.buf.open")
 local unl_finder = require("UNL.finder")
@@ -53,7 +53,7 @@ function M.execute(opts)
         end
       end
 
-      unl_picker.pick({
+      unl_picker.open({
         kind = "unx_unpushed_files",
         title = "Unpushed Files",
         items = picker_items,
@@ -69,3 +69,4 @@ function M.execute(opts)
 end
 
 return M
+

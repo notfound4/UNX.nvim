@@ -1,5 +1,5 @@
 local unl_api = require("UNL.api")
-local unl_picker = require("UNL.backend.picker")
+local unl_picker = require("UNL.picker")
 local favorites_cache = require("UNX.cache.favorites")
 local unl_path = require("UNL.path")
 local unx_config = require("UNX.config")
@@ -26,7 +26,7 @@ function M.execute(opts)
       
       local title = "Add to Favorites (UNL Server)"
 
-      unl_picker.pick({        kind = "unx_favorites_add",
+      unl_picker.open({        kind = "unx_favorites_add",
         title = title,
         items = picker_items,
         conf = unx_config.get(),
@@ -72,3 +72,4 @@ function M.execute(opts)
 end
 
 return M
+

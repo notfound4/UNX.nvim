@@ -2,7 +2,7 @@
 local unl_api = require("UNL.api")
 local fs = require("vim.fs")
 local favorites_cache = require("UNX.cache.favorites")
-local unl_picker = require("UNL.backend.picker")
+local unl_picker = require("UNL.picker")
 local unx_config = require("UNX.config")
 local unl_path = require("UNL.path")
 local unl_buf_open = require("UNL.buf.open")
@@ -340,7 +340,7 @@ function M.find_files_recursive(tree)
 
         table.sort(filtered_items, function(a, b) return a.display < b.display end)
 
-        unl_picker.pick({
+        unl_picker.open({
             kind = "unx_find_files_recursive",
             title = " Find in: " .. dir_name,
             items = filtered_items,
@@ -377,3 +377,4 @@ function M.refresh(tree)
 end
 
 return M
+
