@@ -70,20 +70,22 @@ end
 
 local function paths_to_tree_nodes(file_items, root_path)
     if not file_items or #file_items == 0 then return {} end
-    local root_len = #root_path
+    local norm_root = unl_path.normalize(root_path)
+    local root_len = #norm_root
     local dir_map = {}
     local root_nodes = {}
-    if root_path:sub(-1) == "/" then root_path = root_path:sub(1, -2) end
 
     local function get_or_create_dir(dir_path)
-        if dir_path == root_path or #dir_path <= root_len then return nil end
-        if dir_map[dir_path] then return dir_map[dir_path] end
+        local norm_dir = unl_path.normalize(dir_path)
+        if norm_dir:lower() == norm_root:lower() or #norm_dir <= root_len then return nil end
+        if dir_map[norm_dir] then return dir_map[norm_dir] end
+        
         local parent_path = vim.fn.fnamemodify(dir_path, ":h")
         local dir_name = vim.fn.fnamemodify(dir_path, ":t")
-        local node = Tree.Node({ text = dir_name, id = unl_path.normalize(dir_path), path = dir_path, type = "directory", _has_children = true })
+        local node = Tree.Node({ text = dir_name, id = norm_dir, path = dir_path, type = "directory", _has_children = true })
         node:expand()
         local entry = { node = node, children = {} }
-        dir_map[dir_path] = entry
+        dir_map[norm_dir] = entry
         local parent_entry = get_or_create_dir(parent_path)
         if parent_entry then table.insert(parent_entry.children, node) else table.insert(root_nodes, node) end
         return entry
@@ -92,9 +94,10 @@ local function paths_to_tree_nodes(file_items, root_path)
     for _, item in ipairs(file_items) do
         if item.type ~= "directory" then
             local path = item.path
+            local norm_path = unl_path.normalize(path)
             local parent_path = vim.fn.fnamemodify(path, ":h")
             local parent_entry = get_or_create_dir(parent_path)
-            local file_node = Tree.Node({ text = item.display or vim.fn.fnamemodify(path, ":t"), id = item.path, path = item.path, type = "file", _has_children = false })
+            local file_node = Tree.Node({ text = item.display or vim.fn.fnamemodify(path, ":t"), id = norm_path, path = path, type = "file", _has_children = false })
             if parent_entry then table.insert(parent_entry.children, file_node) else table.insert(root_nodes, file_node) end
         end
     end
@@ -169,7 +172,15 @@ function M.fetch_root_data(tree_instance, expanded_state, skip_vcs_refresh)
                 for _, item in ipairs(items) do table.insert(filtered_items, { path = item.path, display = item.filename, type = "file" }) end
                 if #filtered_items > 0 then
                     local hierarchy_nodes = paths_to_tree_nodes(filtered_items, project_info.root)
-                    local proj_root = Tree.Node({ text = vim.fn.fnamemodify(project_info.root, ":t") .. " (Results)", id = unl_path.normalize(project_info.root), path = project_info.root, type = "directory", _has_children = true, extra = { uep_type = "fs" } }, hierarchy_nodes)
+                    local norm_root = unl_path.normalize(project_info.root)
+                    local proj_root = Tree.Node({ 
+                        text = vim.fn.fnamemodify(project_info.root, ":t") .. " (Results)", 
+                        id = "search_results_" .. norm_root, 
+                        path = project_info.root, 
+                        type = "directory", 
+                        _has_children = true, 
+                        extra = { uep_type = "fs" } 
+                    }, hierarchy_nodes)
                     proj_root:expand(); table.insert(nodes, proj_root)
                 else table.insert(nodes, Tree.Node({ text = "No matching files in project.", kind = "Info", id = "no_match_main" })) end
             else table.insert(nodes, Tree.Node({ text = "Failed to fetch file list from Server.", kind = "Info", id = "error" })) end
