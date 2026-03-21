@@ -86,21 +86,72 @@ local function get_available_device_profiles(project_root, engine_root)
     return profiles
 end
 
-local function get_available_platforms(engine_root)
-    local config_root = fs.joinpath(engine_root, "Engine", "Config")
+local function get_available_platforms(project_root, engine_root)
     local platforms = {}
     local seen = {}
     
-    local handle = vim.loop.fs_scandir(config_root)
-    if handle then
-        while true do
-            local name, type = vim.loop.fs_scandir_next(handle)
-            if not name then break end
-            if (type == "directory" or type == "link") and not name:match("^%.") then
-                local check_ini = fs.joinpath(config_root, name, name .. "Engine.ini")
-                local check_ddpi = fs.joinpath(config_root, name, "DataDrivenPlatformInfo.ini")
-                if vim.fn.filereadable(check_ini) == 1 or vim.fn.filereadable(check_ddpi) == 1 then
-                    table.insert(platforms, name); seen[name] = true
+    local function check_platform(name, dir)
+        if seen[name] then return end
+        local check_paths = {
+            fs.joinpath(dir, name, name .. "Engine.ini"),
+            fs.joinpath(dir, name, "DataDrivenPlatformInfo.ini"),
+            fs.joinpath(dir, name, "Config"),
+        }
+        for _, p in ipairs(check_paths) do
+            if vim.fn.filereadable(p) == 1 or vim.fn.isdirectory(p) == 1 then
+                table.insert(platforms, name); seen[name] = true
+                return
+            end
+        end
+    end
+
+    if engine_root then
+        local engine_config_root = fs.joinpath(engine_root, "Engine", "Config")
+        local handle = vim.loop.fs_scandir(engine_config_root)
+        if handle then
+            while true do
+                local name, type = vim.loop.fs_scandir_next(handle)
+                if not name then break end
+                if (type == "directory" or type == "link") and not name:match("^%.") then
+                    check_platform(name, engine_config_root)
+                end
+            end
+        end
+
+        local engine_platforms_root = fs.joinpath(engine_root, "Engine", "Platforms")
+        handle = vim.loop.fs_scandir(engine_platforms_root)
+        if handle then
+            while true do
+                local name, type = vim.loop.fs_scandir_next(handle)
+                if not name then break end
+                if (type == "directory" or type == "link") and not name:match("^%.") then
+                    check_platform(name, engine_platforms_root)
+                end
+            end
+        end
+    end
+
+    if project_root then
+        local project_config_root = fs.joinpath(project_root, "Config")
+        local handle = vim.loop.fs_scandir(project_config_root)
+        if handle then
+            while true do
+                local name, type = vim.loop.fs_scandir_next(handle)
+                if not name then break end
+                if (type == "directory" or type == "link") and not name:match("^%.") then
+                    check_platform(name, project_config_root)
+                end
+            end
+        end
+
+        local project_platforms_root = fs.joinpath(project_root, "Platforms")
+        handle = vim.loop.fs_scandir(project_platforms_root)
+        if handle then
+            while true do
+                local name, type = vim.loop.fs_scandir_next(handle)
+                if not name then break end
+                if (type == "directory" or type == "link") and not name:match("^%.") then
+                    check_platform(name, project_platforms_root)
                 end
             end
         end
@@ -109,8 +160,17 @@ local function get_available_platforms(engine_root)
     local major = { "Windows", "Mac", "Linux", "Android", "IOS", "TVOS", "Apple", "Unix" }
     for _, p in ipairs(major) do
         if not seen[p] then
-            local p_dir = fs.joinpath(config_root, p)
-            if vim.fn.isdirectory(p_dir) == 1 then table.insert(platforms, p); seen[p] = true end
+            local paths = {
+                engine_root and fs.joinpath(engine_root, "Engine/Config", p),
+                engine_root and fs.joinpath(engine_root, "Engine/Platforms", p),
+                project_root and fs.joinpath(project_root, "Config", p),
+                project_root and fs.joinpath(project_root, "Platforms", p),
+            }
+            for _, path in ipairs(paths) do
+                if path and vim.fn.isdirectory(path) == 1 then
+                    table.insert(platforms, p); seen[p] = true; break
+                end
+            end
         end
     end
     table.sort(platforms)
@@ -121,30 +181,65 @@ local function get_config_stack(project_root, engine_root, target)
     local stack = {}
     local platform = target.platform 
     
+    local function add(p)
+        if vim.fn.filereadable(p) == 1 then
+            table.insert(stack, { type="file", path=p })
+        end
+    end
+
+    local function add_all_in_dir(dir)
+        if vim.fn.isdirectory(dir) ~= 1 then return end
+        local handle = vim.loop.fs_scandir(dir)
+        if not handle then return end
+        local files = {}
+        while true do
+            local name, type = vim.loop.fs_scandir_next(handle)
+            if not name then break end
+            if type == "file" and name:match("%.ini$") then
+                table.insert(files, name)
+            end
+        end
+        table.sort(files)
+        for _, f in ipairs(files) do
+            add(fs.joinpath(dir, f))
+        end
+    end
+
     if engine_root then 
-        table.insert(stack, { type="file", path=fs.joinpath(engine_root, "Engine/Config/Base.ini") })
-        table.insert(stack, { type="file", path=fs.joinpath(engine_root, "Engine/Config/BaseEngine.ini") })
+        add(fs.joinpath(engine_root, "Engine/Config/Base.ini"))
+        add(fs.joinpath(engine_root, "Engine/Config/BaseEngine.ini"))
     end
     
     if engine_root and platform then
-        if platform == "Mac" or platform == "IOS" or platform == "TVOS" then
-            table.insert(stack, { type="file", path=fs.joinpath(engine_root, "Engine/Config/Apple/AppleEngine.ini") })
+        if platform == "Mac" or platform == "IOS" or platform == "TVOS" or platform == "Apple" then
+            add(fs.joinpath(engine_root, "Engine/Config/Apple/AppleEngine.ini"))
         end
-        if platform == "Linux" then
-            table.insert(stack, { type="file", path=fs.joinpath(engine_root, "Engine/Config/Unix/UnixEngine.ini") })
+        if platform == "Linux" or platform == "Unix" then
+            add(fs.joinpath(engine_root, "Engine/Config/Unix/UnixEngine.ini"))
         end
     end
 
     if engine_root and platform and platform ~= "Default" then
-        table.insert(stack, { type="file", path=fs.joinpath(engine_root, "Engine/Config", platform, platform .. "Engine.ini") })
+        -- Engine/Config/xxx (Legacy)
+        add(fs.joinpath(engine_root, "Engine/Config", platform, platform .. "Engine.ini"))
+        
+        -- Engine/Platforms/xxx/Config (All .ini files)
+        add_all_in_dir(fs.joinpath(engine_root, "Engine/Platforms", platform, "Config"))
     end
 
     if project_root then 
-        table.insert(stack, { type="file", path=fs.joinpath(project_root, "Config/DefaultEngine.ini") })
+        add(fs.joinpath(project_root, "Config/DefaultEngine.ini"))
     end
     
+    -- Project/Platforms/Config (as requested by user)
+    if project_root then
+        add_all_in_dir(fs.joinpath(project_root, "Platforms/Config"))
+    end
+
     if project_root and platform and platform ~= "Default" then
-        table.insert(stack, { type="file", path=fs.joinpath(project_root, "Config", platform, platform .. "Engine.ini") })
+        add(fs.joinpath(project_root, "Config", platform, platform .. "Engine.ini"))
+        -- Project/Platforms/xxx/Config (All .ini files)
+        add_all_in_dir(fs.joinpath(project_root, "Platforms", platform, "Config"))
     end
     
     if target.is_profile and target.cvars then
@@ -217,9 +312,11 @@ local function build_config_tree_nodes(project_root, engine_root)
     end
 
     add_or_merge_target({ name = "Default (Editor)", platform = "Default" })
-    if engine_root then
-        local platforms = get_available_platforms(engine_root)
-        for _, p in ipairs(platforms) do add_or_merge_target({ name = p, platform = p, is_profile = false }) end
+    
+    local platforms = get_available_platforms(project_root, engine_root)
+    for _, p in ipairs(platforms) do add_or_merge_target({ name = p, platform = p, is_profile = false }) end
+    
+    if engine_root or project_root then
         local profiles = get_available_device_profiles(project_root, engine_root)
         local profile_names = vim.tbl_keys(profiles)
         table.sort(profile_names)
