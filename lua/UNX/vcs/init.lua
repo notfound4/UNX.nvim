@@ -2,10 +2,11 @@
 local M = {}
 local unl_vcs = require("UNL.vcs")
 
--- VCSプロバイダーの定義 (UNL.vcs の各モジュールを直接参照)
+-- VCSプロバイダーの定義 (UNX ラッパーを使用)
 local providers = {
-    { name = "p4",  module = require("UNL.vcs.p4") },
-    { name = "git", module = require("UNL.vcs.git") },
+    { name = "p4",  module = require("UNX.vcs.p4") },
+    { name = "git", module = require("UNX.vcs.git") },
+    { name = "svn", module = require("UNX.vcs.svn") },
 }
 
 --- 設定を取得するヘルパー
@@ -40,8 +41,13 @@ function M.refresh(root_path, on_complete)
 
     for _, provider in ipairs(providers) do
         local cfg = conf[provider.name]
-        if cfg and cfg.enabled ~= false then
+        if cfg and cfg.enabled ~= false and type(provider.module.refresh) == "function" then
             provider.module.refresh(root_path, check_done, "UNX")
+        else
+            -- refresh未実装のプロバイダーはスキップ
+            if cfg and cfg.enabled ~= false then
+                check_done()
+            end
         end
     end
 end
@@ -100,7 +106,7 @@ function M.get_status(path)
 
     for _, provider in ipairs(providers) do
         local cfg = conf[provider.name]
-        if cfg and cfg.enabled ~= false then
+        if cfg and cfg.enabled ~= false and type(provider.module.get_status) == "function" then
             local status = provider.module.get_status(path)
             if status then
                 return status
@@ -158,6 +164,157 @@ function M.get_file_content(path, on_success)
     end
     
     try_next()
+end
+
+--- 有効なVCSプロバイダーからユーザー名を取得する
+--- @param cwd string プロジェクトルート
+--- @param callback function(name: string|nil, provider_name: string|nil)
+function M.get_user_name(cwd, callback)
+    local conf = get_config()
+    local index = 1
+
+    local function try_next()
+        if index > #providers then
+            return callback(nil, nil)
+        end
+
+        local provider = providers[index]
+        index = index + 1
+        local cfg = conf[provider.name]
+
+        if cfg and cfg.enabled ~= false and type(provider.module.get_user_name) == "function" then
+            provider.module.get_user_name(cwd, function(name)
+                if name then
+                    callback(name, provider.name)
+                else
+                    try_next()
+                end
+            end)
+        else
+            try_next()
+        end
+    end
+
+    try_next()
+end
+
+--- 有効な全VCSプロバイダーからコミット履歴を集約する
+--- @param cwd string プロジェクトルート
+--- @param limit number 最大取得件数
+--- @param author string|nil 著者フィルタ (nilの場合は全コミット)
+--- @param callback function(commits: table[]) 結果コミットリスト
+function M.get_log(cwd, limit, author, callback)
+    local conf = get_config()
+    local all_commits = {}
+    local pending = 0
+
+    for _, provider in ipairs(providers) do
+        local cfg = conf[provider.name]
+        if cfg and cfg.enabled ~= false and type(provider.module.get_log) == "function" then
+            pending = pending + 1
+        end
+    end
+
+    if pending == 0 then
+        return callback({})
+    end
+
+    local function check_done()
+        pending = pending - 1
+        if pending <= 0 then
+            callback(all_commits)
+        end
+    end
+
+    for _, provider in ipairs(providers) do
+        local cfg = conf[provider.name]
+        if cfg and cfg.enabled ~= false and type(provider.module.get_log) == "function" then
+            provider.module.get_log(cwd, limit, author, function(commits)
+                if commits then
+                    for _, c in ipairs(commits) do
+                        c.vcs = c.vcs or provider.name
+                        table.insert(all_commits, c)
+                    end
+                end
+                check_done()
+            end)
+        end
+    end
+end
+
+--- 各VCSプロバイダーが自身のユーザー名を使って「自分のコミット」を取得する
+--- @param cwd string プロジェクトルート
+--- @param limit number 最大取得件数
+--- @param callback function(commits: table[]) 結果コミットリスト
+function M.get_my_log(cwd, limit, callback)
+    local conf = get_config()
+    local all_commits = {}
+    local pending = 0
+
+    for _, provider in ipairs(providers) do
+        local cfg = conf[provider.name]
+        if cfg and cfg.enabled ~= false
+           and type(provider.module.get_log) == "function"
+           and type(provider.module.get_user_name) == "function" then
+            pending = pending + 1
+        end
+    end
+
+    if pending == 0 then
+        return callback({})
+    end
+
+    local function check_done()
+        pending = pending - 1
+        if pending <= 0 then
+            callback(all_commits)
+        end
+    end
+
+    for _, provider in ipairs(providers) do
+        local cfg = conf[provider.name]
+        if cfg and cfg.enabled ~= false
+           and type(provider.module.get_log) == "function"
+           and type(provider.module.get_user_name) == "function" then
+            -- Each provider resolves its own user name
+            provider.module.get_user_name(cwd, function(user_name)
+                if not user_name then
+                    check_done()
+                    return
+                end
+                provider.module.get_log(cwd, limit, user_name, function(commits)
+                    if commits then
+                        for _, c in ipairs(commits) do
+                            c.vcs = c.vcs or provider.name
+                            table.insert(all_commits, c)
+                        end
+                    end
+                    check_done()
+                end)
+            end)
+        end
+    end
+end
+
+--- コミットの変更ファイルリストを取得する
+--- @param cwd string プロジェクトルート
+--- @param commit table コミットオブジェクト（hashとvcsフィールド必須）
+--- @param callback function(files: string[]|nil)
+function M.get_commit_files(cwd, commit, callback)
+    local conf = get_config()
+    local vcs_name = commit.vcs
+
+    for _, provider in ipairs(providers) do
+        if provider.name == vcs_name then
+            local cfg = conf[provider.name]
+            if cfg and cfg.enabled ~= false and type(provider.module.get_commit_files) == "function" then
+                provider.module.get_commit_files(cwd, commit.hash, callback)
+                return
+            end
+        end
+    end
+
+    callback(nil)
 end
 
 return M

@@ -86,6 +86,9 @@ M.defaults = {
     vcs = {
         git = { enabled = true },
         p4 = { enabled = true, auto_checkout = true },
+        svn = { enabled = true },
+        my_commits_limit = 10,
+        repo_commits_limit = 10,
     },
   symbols = {
         expand_groups = true, -- Functions, Propertiesなどを最初から展開する

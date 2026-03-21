@@ -5,6 +5,8 @@ local ViewUproject = require("UNX.ui.view.uproject")
 local ViewSymbols  = require("UNX.ui.view.symbols")
 local ViewInsights = require("UNX.ui.view.insights")
 local ViewConfig   = require("UNX.ui.view.config")
+local ViewVCS      = require("UNX.ui.view.vcs")
+local ViewHistory  = require("UNX.ui.view.vcs.history")
 local ctx_explorer = require("UNX.context.explorer")
 local logger_module = require("UNX.logger")
 
@@ -19,13 +21,21 @@ local TAB_CONFIG = {
             view_mod = ViewSymbols,
         }
     },
-    config = {
+    vcs = {
         order    = 2,
+        display  = "vcs",
+        view_mod = ViewVCS,
+        sub_view = {
+            view_mod = ViewHistory,
+        }
+    },
+    config = {
+        order    = 3,
         display  = "config",
         view_mod = ViewConfig,
     },
     insights = {
-        order    = 3,
+        order    = 4,
         display  = "insights",
         view_mod = ViewInsights,
     },
@@ -166,14 +176,20 @@ local function update_winbars()
     end
 
     if ui.win_sub and vim.api.nvim_win_is_valid(ui.win_sub) then
-        local buf = vim.api.nvim_win_get_buf(ui.win_sub)
-        local buf_name = vim.api.nvim_buf_get_name(buf)
-        local filename = vim.fn.fnamemodify(buf_name, ":t:r")
-        if vim.bo[buf].filetype == "unx-explorer" then
-            filename = "Symbols"
+        local current_key = get_current_tab_key()
+        if current_key == "vcs" then
+            local sym_bar = "%#UNXVCSFunction#  Repository History"
+            pcall(vim.api.nvim_win_set_option, ui.win_sub, "winbar", sym_bar)
+        else
+            local buf = vim.api.nvim_win_get_buf(ui.win_sub)
+            local buf_name = vim.api.nvim_buf_get_name(buf)
+            local filename = vim.fn.fnamemodify(buf_name, ":t:r")
+            if vim.bo[buf].filetype == "unx-explorer" then
+                filename = "Symbols"
+            end
+            local sym_bar = "%#UNXVCSFunction# 󰌗 Class/Function " .. filename
+            pcall(vim.api.nvim_win_set_option, ui.win_sub, "winbar", sym_bar)
         end
-        local sym_bar = "%#UNXVCSFunction# 󰌗 Class/Function " .. filename
-        pcall(vim.api.nvim_win_set_option, ui.win_sub, "winbar", sym_bar)
     end
 end
 
@@ -212,6 +228,12 @@ switch_layout = function(target_key)
                 vim.api.nvim_win_set_buf(ui.win_sub, state.sub.buf)
                 if target_key == "uproject" and vim.bo.filetype:match("cpp") then
                      ViewSymbols.update(state.sub.tree, ui.win_sub, { force = true })
+                end
+                -- For VCS tab, use 50/50 split
+                if target_key == "vcs" then
+                    local total = vim.api.nvim_win_get_height(ui.win_main) + vim.api.nvim_win_get_height(ui.win_sub)
+                    local half = math.floor(total / 2)
+                    vim.api.nvim_win_set_height(ui.win_sub, half)
                 end
             end
         end
