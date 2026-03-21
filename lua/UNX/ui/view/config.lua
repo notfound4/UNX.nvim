@@ -2,369 +2,56 @@ local Tree = require("nui.tree")
 local Line = require("nui.line")
 local unl_api = require("UNL.api")
 local unl_open = require("UNL.buf.open")
-local unl_path = require("UNL.path")
-local unl_parser_ini = require("UNL.parser.ini")
 local ctx_uproject = require("UNX.context.uproject")
-local fs = require("vim.fs")
 
 local M = {}
 
 local active_tree = nil
+local is_loading = false
 
 -- =====================================================================
--- 1. Helper Functions
+-- 1. Helper Functions (Conversion from Server Data)
 -- =====================================================================
 
-local function apply_config_op(current, op, new_value)
-    local is_array = type(current) == "table"
-    if op == "!" then return nil
-    elseif op == "-" then
-        if is_array then
-            local filtered = {}
-            for _, v in ipairs(current) do if v ~= new_value then table.insert(filtered, v) end end
-            return #filtered > 0 and filtered or nil
-        elseif current == new_value then return nil end
-        return current
-    elseif op == "+" then
-        if not current then return { new_value } end
-        if not is_array then current = { current } end
-        table.insert(current, new_value)
-        return current
-    else return new_value end
-end
-
-local function format_value_for_display(val)
-    if type(val) == "table" then return string.format("[Array x%d] %s", #val, val[#val]) end
-    if not val then return "nil" end
-    if #val > 50 then return val:sub(1, 47) .. "..." end
-    return val
-end
-
-local function parse_device_profiles_ini(filepath, profiles_map)
-    local parsed = unl_parser_ini.parse(filepath)
-    if not parsed or not parsed.sections then return end
-    local filename_short = vim.fn.fnamemodify(filepath, ":t")
-
-    for section_name, items in pairs(parsed.sections) do
-        local profile_name = section_name:match("^(.*)%s+DeviceProfile$")
-        if profile_name then
-            if not profiles_map[profile_name] then
-                local parent_plat = profile_name:match("^([^_]+)") or profile_name
-                profiles_map[profile_name] = {
-                    name = profile_name,
-                    parent_platform = parent_plat,
-                    cvars = {}
-                }
-            end
-            for _, item in ipairs(items) do
-                if item.key == "CVars" or item.key == "+CVars" then
-                    local cvar_key, cvar_val = item.value:match("^([^=]+)=(.*)$")
-                    if cvar_key then
-                        table.insert(profiles_map[profile_name].cvars, {
-                            key = vim.trim(cvar_key),
-                            value = vim.trim(cvar_val or ""),
-                            op = "", 
-                            line = item.line,
-                            raw_file = filename_short,
-                            full_path = filepath
-                        })
-                    end
-                end
-            end
-        end
-    end
-end
-
-local function get_available_device_profiles(project_root, engine_root)
-    local profiles = {} 
-    if engine_root then
-        parse_device_profiles_ini(fs.joinpath(engine_root, "Engine/Config/BaseDeviceProfiles.ini"), profiles)
-    end
-    if project_root then
-        parse_device_profiles_ini(fs.joinpath(project_root, "Config/DefaultDeviceProfiles.ini"), profiles)
-    end
-    return profiles
-end
-
-local function get_available_platforms(project_root, engine_root)
-    local platforms = {}
-    local seen = {}
-    
-    local function check_platform(name, dir)
-        if seen[name] then return end
-        local check_paths = {
-            fs.joinpath(dir, name, name .. "Engine.ini"),
-            fs.joinpath(dir, name, "DataDrivenPlatformInfo.ini"),
-            fs.joinpath(dir, name, "Config"),
-        }
-        for _, p in ipairs(check_paths) do
-            if vim.fn.filereadable(p) == 1 or vim.fn.isdirectory(p) == 1 then
-                table.insert(platforms, name); seen[name] = true
-                return
-            end
-        end
-    end
-
-    if engine_root then
-        local engine_config_root = fs.joinpath(engine_root, "Engine", "Config")
-        local handle = vim.loop.fs_scandir(engine_config_root)
-        if handle then
-            while true do
-                local name, type = vim.loop.fs_scandir_next(handle)
-                if not name then break end
-                if (type == "directory" or type == "link") and not name:match("^%.") then
-                    check_platform(name, engine_config_root)
-                end
-            end
-        end
-
-        local engine_platforms_root = fs.joinpath(engine_root, "Engine", "Platforms")
-        handle = vim.loop.fs_scandir(engine_platforms_root)
-        if handle then
-            while true do
-                local name, type = vim.loop.fs_scandir_next(handle)
-                if not name then break end
-                if (type == "directory" or type == "link") and not name:match("^%.") then
-                    check_platform(name, engine_platforms_root)
-                end
-            end
-        end
-    end
-
-    if project_root then
-        local project_config_root = fs.joinpath(project_root, "Config")
-        local handle = vim.loop.fs_scandir(project_config_root)
-        if handle then
-            while true do
-                local name, type = vim.loop.fs_scandir_next(handle)
-                if not name then break end
-                if (type == "directory" or type == "link") and not name:match("^%.") then
-                    check_platform(name, project_config_root)
-                end
-            end
-        end
-
-        local project_platforms_root = fs.joinpath(project_root, "Platforms")
-        handle = vim.loop.fs_scandir(project_platforms_root)
-        if handle then
-            while true do
-                local name, type = vim.loop.fs_scandir_next(handle)
-                if not name then break end
-                if (type == "directory" or type == "link") and not name:match("^%.") then
-                    check_platform(name, project_platforms_root)
-                end
-            end
-        end
-    end
-    
-    local major = { "Windows", "Mac", "Linux", "Android", "IOS", "TVOS", "Apple", "Unix" }
-    for _, p in ipairs(major) do
-        if not seen[p] then
-            local paths = {
-                engine_root and fs.joinpath(engine_root, "Engine/Config", p),
-                engine_root and fs.joinpath(engine_root, "Engine/Platforms", p),
-                project_root and fs.joinpath(project_root, "Config", p),
-                project_root and fs.joinpath(project_root, "Platforms", p),
-            }
-            for _, path in ipairs(paths) do
-                if path and vim.fn.isdirectory(path) == 1 then
-                    table.insert(platforms, p); seen[p] = true; break
-                end
-            end
-        end
-    end
-    table.sort(platforms)
-    return platforms
-end
-
-local function get_config_stack(project_root, engine_root, target)
-    local stack = {}
-    local platform = target.platform 
-    
-    local function add(p)
-        if vim.fn.filereadable(p) == 1 then
-            table.insert(stack, { type="file", path=p })
-        end
-    end
-
-    local function add_all_in_dir(dir)
-        if vim.fn.isdirectory(dir) ~= 1 then return end
-        local handle = vim.loop.fs_scandir(dir)
-        if not handle then return end
-        local files = {}
-        while true do
-            local name, type = vim.loop.fs_scandir_next(handle)
-            if not name then break end
-            if type == "file" and name:match("%.ini$") then
-                table.insert(files, name)
-            end
-        end
-        table.sort(files)
-        for _, f in ipairs(files) do
-            add(fs.joinpath(dir, f))
-        end
-    end
-
-    if engine_root then 
-        add(fs.joinpath(engine_root, "Engine/Config/Base.ini"))
-        add(fs.joinpath(engine_root, "Engine/Config/BaseEngine.ini"))
-    end
-    
-    if engine_root and platform then
-        if platform == "Mac" or platform == "IOS" or platform == "TVOS" or platform == "Apple" then
-            add(fs.joinpath(engine_root, "Engine/Config/Apple/AppleEngine.ini"))
-        end
-        if platform == "Linux" or platform == "Unix" then
-            add(fs.joinpath(engine_root, "Engine/Config/Unix/UnixEngine.ini"))
-        end
-    end
-
-    if engine_root and platform and platform ~= "Default" then
-        -- Engine/Config/xxx (Legacy)
-        add(fs.joinpath(engine_root, "Engine/Config", platform, platform .. "Engine.ini"))
-        
-        -- Engine/Platforms/xxx/Config (All .ini files)
-        add_all_in_dir(fs.joinpath(engine_root, "Engine/Platforms", platform, "Config"))
-    end
-
-    if project_root then 
-        add(fs.joinpath(project_root, "Config/DefaultEngine.ini"))
-    end
-    
-    -- Project/Platforms/Config (as requested by user)
-    if project_root then
-        add_all_in_dir(fs.joinpath(project_root, "Platforms/Config"))
-    end
-
-    if project_root and platform and platform ~= "Default" then
-        add(fs.joinpath(project_root, "Config", platform, platform .. "Engine.ini"))
-        -- Project/Platforms/xxx/Config (All .ini files)
-        add_all_in_dir(fs.joinpath(project_root, "Platforms", platform, "Config"))
-    end
-    
-    if target.is_profile and target.cvars then
-        local virtual_section = "SystemSettings" 
-        local virtual_data = { [virtual_section] = {} }
-        for _, cvar in ipairs(target.cvars) do
-            table.insert(virtual_data[virtual_section], {
-                key = cvar.key, value = cvar.value, op = cvar.op, line = cvar.line,
-                raw_file = "Profile: " .. cvar.raw_file, full_path = cvar.full_path
-            })
-        end
-        table.insert(stack, { type="virtual", data=virtual_data, name=target.name })
-    end
-    return stack
-end
-
-local function resolve_config_settings(stack)
-    local resolved = {} 
-    for _, source in ipairs(stack) do
-        local sections_data = nil
-        local source_name = ""
-        local full_path = ""
-        if source.type == "file" then
-            local parsed = unl_parser_ini.parse(source.path)
-            if parsed then sections_data = parsed.sections end
-            full_path = source.path
-            source_name = vim.fn.fnamemodify(source.path, ":t")
-            local parent = vim.fn.fnamemodify(source.path, ":h:t")
-            if parent ~= "Config" then source_name = parent .. "/" .. source_name end
-        elseif source.type == "virtual" then
-            sections_data = source.data
-            source_name = source.name 
-            full_path = "DeviceProfile"
-        end
-        if sections_data then
-            for section, items in pairs(sections_data) do
-                if not resolved[section] then resolved[section] = {} end
-                for _, item in ipairs(items) do
-                    local key = item.key
-                    if not resolved[section][key] then
-                        resolved[section][key] = { value = nil, history = {} }
-                    end
-                    local entry = resolved[section][key]
-                    entry.value = apply_config_op(entry.value, item.op, item.value)
-                    table.insert(entry.history, {
-                        file = source.type == "virtual" and item.raw_file or source_name,
-                        full_path = source.type == "virtual" and item.full_path or full_path,
-                        value = format_value_for_display(entry.value),
-                        op = item.op, line = item.line
-                    })
-                end
-            end
-        end
-    end
-    return resolved
-end
-
-local function build_config_tree_nodes(project_root, engine_root)
-    local targets_map = {}
-    local targets_order = {}
-    local function add_or_merge_target(t)
-        if not targets_map[t.name] then
-            targets_map[t.name] = t
-            table.insert(targets_order, t.name)
-        else
-            local existing = targets_map[t.name]
-            if t.cvars and #t.cvars > 0 then existing.cvars = t.cvars; existing.is_profile = true end
-            if not existing.platform and t.platform then existing.platform = t.platform end
-        end
-    end
-
-    add_or_merge_target({ name = "Default (Editor)", platform = "Default" })
-    
-    local platforms = get_available_platforms(project_root, engine_root)
-    for _, p in ipairs(platforms) do add_or_merge_target({ name = p, platform = p, is_profile = false }) end
-    
-    if engine_root or project_root then
-        local profiles = get_available_device_profiles(project_root, engine_root)
-        local profile_names = vim.tbl_keys(profiles)
-        table.sort(profile_names)
-        for _, pname in ipairs(profile_names) do
-            local pdata = profiles[pname]
-            local parent_valid = (pdata.parent_platform == "Windows")
-            if not parent_valid then
-                for _, pp in ipairs(platforms) do if pp == pdata.parent_platform then parent_valid = true; break end end
-            end
-            if parent_valid then add_or_merge_target({ name = pname, platform = pdata.parent_platform, is_profile = true, cvars = pdata.cvars }) end
-        end
-    end
-    
+local function convert_server_data_to_nodes(platforms)
     local root_children = {}
-    for _, tname in ipairs(targets_order) do
-        local target = targets_map[tname]
-        local stack = get_config_stack(project_root, engine_root, target)
-        local resolved_data = resolve_config_settings(stack)
+    
+    if not platforms or type(platforms) ~= "table" then return root_children end
+
+    for _, p in ipairs(platforms) do
         local platform_children = {}
-        local sections = vim.tbl_keys(resolved_data); table.sort(sections)
-        for _, section in ipairs(sections) do
-            local keys_data = resolved_data[section]
+        for _, s in ipairs(p.sections or {}) do
             local section_children = {}
-            local keys = vim.tbl_keys(keys_data); table.sort(keys)
-            for _, key in ipairs(keys) do
-                local info = keys_data[key]
+            for _, param in ipairs(s.parameters or {}) do
                 local history_nodes = {}
-                for i, h in ipairs(info.history) do
+                for i, h in ipairs(param.history or {}) do
                     table.insert(history_nodes, Tree.Node({
                         text = string.format("%s %s [%s]", h.op == "" and "=" or h.op, h.value, h.file),
-                        id = string.format("hist_%s_%s_%s_%d_%d", target.name, section, key, h.line, i),
+                        id = string.format("hist_%s_%s_%s_%d_%d", p.name, s.name, param.key, h.line, i),
                         type = "history",
                         extra = { filepath = h.full_path, line = h.line, op = h.op }
                     }))
                 end
                 table.insert(section_children, Tree.Node({
-                    text = key, id = string.format("%s_%s_%s", target.name, section, key),
-                    type = "parameter", extra = { final_value = format_value_for_display(info.value) }
+                    text = param.key, 
+                    id = string.format("param_%s_%s_%s", p.name, s.name, param.key),
+                    type = "parameter", 
+                    extra = { final_value = param.value }
                 }, history_nodes))
             end
             table.insert(platform_children, Tree.Node({
-                text = section, id = string.format("%s_%s", target.name, section), type = "section"
+                text = s.name, 
+                id = string.format("section_%s_%s", p.name, s.name), 
+                type = "section"
             }, section_children))
         end
         table.insert(root_children, Tree.Node({
-            text = target.name, id = "target_" .. target.name, type = target.is_profile and "profile" or "platform"
+            text = p.name, 
+            id = "target_" .. p.name, 
+            type = p.is_profile and "profile" or "platform"
         }, platform_children))
     end
+    
     return root_children
 end
 
@@ -424,20 +111,38 @@ function M.render(tree_instance)
     if not tree_instance then tree_instance = active_tree end
     if not tree_instance then return end
     
+    if is_loading then return end
+
     local ctx = ctx_uproject.get()
     if not ctx.project_root then
         tree_instance:set_nodes({ Tree.Node({ text = "No project root.", kind = "Info" }) })
         tree_instance:render(); return
     end
 
-    local nodes = build_config_tree_nodes(ctx.project_root, ctx.engine_root)
-    local root_node = Tree.Node({
-        text = "Config Explorer", id = "config_logical_root", type = "root"
-    }, nodes)
-    root_node:expand()
-    
-    tree_instance:set_nodes({ root_node })
+    is_loading = true
+    tree_instance:set_nodes({ Tree.Node({ text = " 󱑮 Loading Config Data from Server...", type = "info" }) })
     tree_instance:render()
+
+    -- コールバック引数は (result, err) の順序
+    unl_api.db.query("GetConfigData", { 
+        engine_root = ctx.engine_root 
+    }, function(result, err)
+        is_loading = false
+        if err or not result then
+            tree_instance:set_nodes({ Tree.Node({ text = "Error: " .. tostring(err or "No result"), type = "error" }) })
+            tree_instance:render()
+            return
+        end
+
+        local nodes = convert_server_data_to_nodes(result)
+        local root_node = Tree.Node({
+            text = "Config Explorer (Remote)", id = "config_logical_root", type = "root"
+        }, nodes)
+        root_node:expand()
+        
+        tree_instance:set_nodes({ root_node })
+        tree_instance:render()
+    end)
 end
 
 function M.on_node_action(tree_instance)
