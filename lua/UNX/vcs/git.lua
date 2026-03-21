@@ -107,24 +107,79 @@ function M.get_log(cwd, limit, author, callback)
     end)
 end
 
---- Get changed files for a commit
+--- Get changed files for a commit (structured for submodule grouping)
 --- @param cwd string Root directory
 --- @param commit_hash string Commit hash
---- @param callback function(files: string[]|nil)
+--- @param callback function(items: table[]|nil)
 function M.get_commit_files(cwd, commit_hash, callback)
     find_git_root(cwd, function(git_root)
         if not git_root then return callback(nil) end
 
-        spawn_git({"show", "--name-only", "--pretty=format:", commit_hash}, git_root, function(output)
+        -- Use --raw to detect submodules (mode 160000)
+        spawn_git({"show", "--raw", "--pretty=format:", commit_hash}, git_root, function(output)
             if not output then return callback(nil) end
 
-            local files = {}
-            for line in output:gmatch("[^\r\n]+") do
-                if line ~= "" then
-                    table.insert(files, line)
+            local items = {}
+            local submodule_jobs = 0
+            local is_iterating = true
+
+            local function check_done()
+                if not is_iterating and submodule_jobs == 0 then
+                    -- Sort: submodules first, then normal files
+                    table.sort(items, function(a, b)
+                        if a.type ~= b.type then return a.type == "submodule" end
+                        return a.path < b.path
+                    end)
+                    callback(items)
                 end
             end
-            callback(files)
+
+            for line in output:gmatch("[^\r\n]+") do
+                local _, new_mode, old_hash, new_hash, _, path = line:match("^:(%d+) (%d+) (%x+) (%x+) (%u%d*)%s+(.+)$")
+                
+                if path then
+                    if new_mode == "160000" then
+                        -- Submodule detected
+                        submodule_jobs = submodule_jobs + 1
+                        local sub_abs_path = unl_path.join(git_root, path)
+                        
+                        spawn_git({"diff", "--name-only", old_hash, new_hash}, sub_abs_path, function(sub_output)
+                            local sub_files = {}
+                            if sub_output then
+                                for sub_line in sub_output:gmatch("[^\r\n]+") do
+                                    if sub_line ~= "" then
+                                        table.insert(sub_files, {
+                                            name = vim.fn.fnamemodify(sub_line, ":t"),
+                                            rel_path = sub_line,
+                                            full_rel_path = path .. "/" .. sub_line
+                                        })
+                                    end
+                                end
+                            end
+                            
+                            table.insert(items, {
+                                type = "submodule",
+                                path = path,
+                                name = path, -- Submodule name is its path
+                                files = sub_files
+                            })
+                            submodule_jobs = submodule_jobs - 1
+                            check_done()
+                        end)
+                    else
+                        -- Normal file
+                        table.insert(items, {
+                            type = "file",
+                            path = path,
+                            name = vim.fn.fnamemodify(path, ":t"),
+                            full_rel_path = path
+                        })
+                    end
+                end
+            end
+            
+            is_iterating = false
+            check_done()
         end)
     end)
 end

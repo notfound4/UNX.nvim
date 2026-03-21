@@ -27,9 +27,17 @@ function M.create(bufnr)
                 line:append(" " .. icon .. " ", "Comment")
                 line:append(node.data.hash, "Special")
                 line:append(" " .. node.data.message, "UNXFileName")
-                line:append(" (" .. node.data.date .. ")", "Comment")
+                if node.data.date and node.data.date ~= "" then
+                    line:append(" (" .. node.data.date .. ")", "Comment")
+                end
+            elseif node.type == "directory" then
+                local indent = string.rep("  ", node:get_depth())
+                line:append(indent)
+                line:append(node:is_expanded() and " " or " ", "UNXDirectoryIcon")
+                line:append(node.text, "UNXDirectoryName")
             elseif node.type == "file" then
-                line:append("   ", "UNXFileIcon")
+                local indent = string.rep("  ", node:get_depth())
+                line:append(indent .. "  ", "UNXFileIcon")
                 line:append(node.text, "UNXFileName")
             elseif node.type == "empty" then
                 line:append("  " .. node.text, "Comment")
@@ -80,20 +88,6 @@ function M.refresh(tree)
     end)
 end
 
---- Resolve file path from commit data
---- Git: relative to git root (_root field)
---- P4/SVN: depot path (may not be local)
-local function resolve_file_path(file_text, commit_data)
-    -- Git stores _root (git root directory)
-    if commit_data._root then
-        return unl_path.join(commit_data._root, file_text)
-    end
-    -- Fallback: try project root
-    local ctx = require("UNX.context.uproject").get()
-    local cwd = ctx.project_root or vim.fn.getcwd()
-    return unl_path.join(cwd, file_text)
-end
-
 function M.on_node_action(tree)
     if not tree then return end
     local node = tree:get_node()
@@ -101,10 +95,17 @@ function M.on_node_action(tree)
 
     if node.type == "file" then
         local commit_data = node.data and node.data.commit or {}
-        local file_path = resolve_file_path(node.text, commit_data)
+        local file_path
+        local rel_path = node.data.full_rel_path or node.data.path or node.text
+        
+        if commit_data._root then
+            file_path = unl_path.join(commit_data._root, rel_path)
+        else
+            local ctx = require("UNX.context.uproject").get()
+            file_path = unl_path.join(ctx.project_root or vim.fn.getcwd(), rel_path)
+        end
 
         if vim.fn.filereadable(file_path) == 1 then
-            -- Find a non-UNX window to open the file in
             local target_win = nil
             for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
                 local buf = vim.api.nvim_win_get_buf(win)
@@ -126,6 +127,16 @@ function M.on_node_action(tree)
         return
     end
 
+    if node.type == "directory" then
+        if node:is_expanded() then
+            node:collapse()
+        else
+            node:expand()
+        end
+        tree:render()
+        return
+    end
+
     if node.type ~= "commit" then return end
 
     -- Toggle expand/collapse for commit files
@@ -143,8 +154,8 @@ function M.on_node_action(tree)
     local ctx = require("UNX.context.uproject").get()
     local cwd = ctx.project_root or vim.fn.getcwd()
 
-    vcs.get_commit_files(cwd, node.data, function(files)
-        if not files or #files == 0 then
+    vcs.get_commit_files(cwd, node.data, function(items)
+        if not items or #items == 0 then
             tree:set_nodes({
                 Tree.Node({ text = "(no changed files)", id = "empty_" .. node.data.hash, type = "empty" }),
             }, node:get_id())
@@ -154,13 +165,35 @@ function M.on_node_action(tree)
         end
 
         local children = {}
-        for _, f in ipairs(files) do
-            table.insert(children, Tree.Node({
-                text = f,
-                id = "repo_file_" .. node.data.hash .. "_" .. f,
-                type = "file",
-                data = { path = f, commit = node.data },
-            }))
+        for _, item in ipairs(items) do
+            if item.type == "submodule" then
+                local sub_children = {}
+                for _, f in ipairs(item.files) do
+                    table.insert(sub_children, Tree.Node({
+                        text = f.name,
+                        id = "repo_file_" .. node.data.hash .. "_" .. f.full_rel_path,
+                        type = "file",
+                        data = { path = f.rel_path, full_rel_path = f.full_rel_path, commit = node.data },
+                    }))
+                end
+                
+                local sub_node = Tree.Node({
+                    text = item.path,
+                    id = "repo_sub_" .. node.data.hash .. "_" .. item.path,
+                    type = "directory",
+                    data = { path = item.path, commit = node.data },
+                }, sub_children)
+                sub_node:expand()
+                table.insert(children, sub_node)
+            else
+                -- Normal file: show only name as requested
+                table.insert(children, Tree.Node({
+                    text = item.name,
+                    id = "repo_file_" .. node.data.hash .. "_" .. item.path,
+                    type = "file",
+                    data = { path = item.path, full_rel_path = item.full_rel_path, commit = node.data },
+                }))
+            end
         end
 
         tree:set_nodes(children, node:get_id())
