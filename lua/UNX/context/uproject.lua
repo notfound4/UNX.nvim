@@ -14,6 +14,7 @@ local default_state = {
     is_pending_expanded = true,
     is_favorites_expanded = true,
     filter_text = "", -- ★追加: フィルタリング用テキスト
+    config_filter_text = "", -- ★追加: Configフィルタリング用テキスト
 }
 
 local function get_store_handle()
@@ -50,6 +51,7 @@ function M.get()
     -- Ensure defaults
     if data.is_pending_expanded == nil then data.is_pending_expanded = true end
     if data.pending_states == nil then data.pending_states = {} end
+    if data.config_filter_text == nil then data.config_filter_text = "" end
     
     return data
 end
@@ -65,6 +67,7 @@ function M.set(data)
             is_pending_expanded = data.is_pending_expanded,
             is_favorites_expanded = data.is_favorites_expanded,
             filter_text = data.filter_text,
+            config_filter_text = data.config_filter_text or "",
             pending_states = data.pending_states or {}, -- 確実に保存
         }
 
