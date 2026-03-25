@@ -13,29 +13,64 @@ function M.create_children_nodes(project_root)
     local favorites = favorites_cache.load(project_root)
     local nodes = {}
     
+    local folder_map = {}
+    local folders = {}
+    local direct_items = {}
+
+    -- 1. フォルダ定義とアイテムを分離
     for _, item in ipairs(favorites) do
-        -- パスが存在するかチェック
-        local is_dir = vim.fn.isdirectory(item.path) == 1
+        if item.is_folder then
+            table.insert(folders, item)
+            folder_map[item.name] = { node = nil, children = {} }
+        else
+            if item.folder and item.folder ~= "Default" then
+                if not folder_map[item.folder] then
+                    -- フォルダ定義がないが指定されている場合（削除された場合など）
+                    folder_map[item.folder] = { node = nil, children = {} }
+                    table.insert(folders, { name = item.folder, is_folder = true })
+                end
+                table.insert(folder_map[item.folder].children, item)
+            else
+                table.insert(direct_items, item)
+            end
+        end
+    end
+
+    -- 2. フォルダノードの作成
+    for _, f in ipairs(folders) do
+        local f_children = {}
+        for _, item in ipairs(folder_map[f.name].children) do
+            local is_dir = vim.fn.isdirectory(item.path) == 1
+            table.insert(f_children, Tree.Node({
+                text = item.name,
+                id = "fav_item_" .. unl_path.normalize(item.path),
+                path = item.path,
+                type = is_dir and "directory" or "file",
+                extra = { uep_type = "fs", is_favorite_item = true, project_root = project_root }
+            }))
+        end
         
         table.insert(nodes, Tree.Node({
+            text = f.name,
+            id = "fav_folder_" .. f.name,
+            type = "directory",
+            _has_children = #f_children > 0,
+            extra = { uep_type = "fs", is_favorite_folder = true, project_root = project_root }
+        }, f_children))
+    end
+
+    -- 3. 直下のアイテムを追加
+    for _, item in ipairs(direct_items) do
+        local is_dir = vim.fn.isdirectory(item.path) == 1
+        table.insert(nodes, Tree.Node({
             text = item.name,
-            id = "fav_" .. unl_path.normalize(item.path),
+            id = "fav_item_" .. unl_path.normalize(item.path),
             path = item.path,
             type = is_dir and "directory" or "file",
-            _has_children = is_dir,
-            extra = {
-                uep_type = "fs",
-                is_favorite_item = true,
-                project_root = project_root -- キャッシュパス維持用
-            }
+            extra = { uep_type = "fs", is_favorite_item = true, project_root = project_root }
         }))
     end
-    -- ... sort
-    table.sort(nodes, function(a, b)
-        if a.type == b.type then return a.text < b.text end
-        return a.type == "directory"
-    end)
-    
+
     return nodes
 end
 

@@ -107,6 +107,11 @@ M.defaults = {
         action_rename = "r",
 
         action_toggle_favorite = "b",
+        action_add_favorite_folder = "N",
+        action_move_favorite = "m",
+        action_move_favorite_another = "M",
+        action_rename_favorite_folder = "R",
+        action_remove_favorite_folder = "D",
         action_find_files = "f",
         action_toggle_parents = "p",
         action_force_refresh = "R",

@@ -142,9 +142,11 @@ function M.fetch_root_data(tree_instance, expanded_state, skip_vcs_refresh)
             local fav_items = require("UNX.cache.favorites").load(project_info.root)
             local filtered_favs = {}
             for _, item in ipairs(fav_items) do
-                local p_match = item.path:lower():find(filter:lower(), 1, true)
-                local n_match = (item.name and item.name:lower():find(filter:lower(), 1, true))
-                if p_match or n_match then table.insert(filtered_favs, item) end
+                if not item.is_folder and item.path then
+                    local p_match = item.path:lower():find(filter:lower(), 1, true)
+                    local n_match = (item.name and item.name:lower():find(filter:lower(), 1, true))
+                    if p_match or n_match then table.insert(filtered_favs, item) end
+                end
             end
             if #filtered_favs > 0 then
                 local fav_children = {}
@@ -188,7 +190,10 @@ function M.fetch_root_data(tree_instance, expanded_state, skip_vcs_refresh)
             vim.schedule(function()
                 local tree = tree_instance or require("UNX.ui.view.uproject").get_active_tree()
                 if tree and vim.api.nvim_buf_is_valid(tree.bufnr) then
-                    tree:set_nodes(nodes); tree:render()
+                    vim.api.nvim_buf_set_option(tree.bufnr, "modifiable", true)
+                    tree:set_nodes(nodes)
+                    tree:render()
+                    vim.api.nvim_buf_set_option(tree.bufnr, "modifiable", false)
                 end
             end)
         end)
@@ -255,9 +260,12 @@ function M.fetch_root_data(tree_instance, expanded_state, skip_vcs_refresh)
                 local tree = tree_mod.get_active_tree()
                 if tree and vim.api.nvim_buf_is_valid(tree.bufnr) then
                     local current_nodes = M.fetch_root_data(tree, tree_mod.get_expanded_state(), true)
+                    
+                    vim.api.nvim_buf_set_option(tree.bufnr, "modifiable", true)
                     tree:set_nodes(current_nodes)
                     tree_mod.restore_expansion_explicit(tree)
                     tree:render()
+                    vim.api.nvim_buf_set_option(tree.bufnr, "modifiable", false)
                 end
             end)
         end)

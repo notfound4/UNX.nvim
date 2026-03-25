@@ -10,6 +10,7 @@ local filter_action = require("UNX.ui.view.action.filter")
 
 local PendingView = require("UNX.ui.view.uproject.pending")
 local FavoritesView = require("UNX.ui.view.uproject.favorites")
+local favorite_actions = require("UNX.ui.view.action.favorites")
 
 local M = {}
 
@@ -68,6 +69,11 @@ function M.apply_keymaps(bufnr, active_tree, conf)
         action_move = file_actions.move,
         action_rename = file_actions.rename,
         action_toggle_favorite = file_actions.toggle_favorite,
+        action_add_favorite_folder = favorite_actions.add_folder,
+        action_move_favorite = favorite_actions.move_item,
+        action_move_favorite_another = favorite_actions.move_item,
+        action_rename_favorite_folder = favorite_actions.rename_folder,
+        action_remove_favorite_folder = favorite_actions.remove_folder,
         action_find_files = file_actions.find_files_recursive,
         action_force_refresh = file_actions.refresh,
         action_diff = diff_action.diff,

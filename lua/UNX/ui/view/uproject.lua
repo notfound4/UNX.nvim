@@ -23,7 +23,11 @@ local function schedule_render()
     render_timer = vim.loop.new_timer()
     render_timer:start(200, 0, vim.schedule_wrap(function()
         if render_timer then if not render_timer:is_closing() then render_timer:close() end render_timer = nil end
-        if active_tree and vim.api.nvim_buf_is_valid(active_tree.bufnr) then active_tree:render() end
+        if active_tree and vim.api.nvim_buf_is_valid(active_tree.bufnr) then
+            vim.api.nvim_buf_set_option(active_tree.bufnr, "modifiable", true)
+            active_tree:render()
+            vim.api.nvim_buf_set_option(active_tree.bufnr, "modifiable", false)
+        end
     end))
 end
 
@@ -96,9 +100,13 @@ end
 function M.refresh(tree_instance)
     if not tree_instance or not vim.api.nvim_buf_is_valid(tree_instance.bufnr) then return end
     local new_nodes = builder.fetch_root_data(tree_instance, expanded_state)
+    
+    vim.api.nvim_buf_set_option(tree_instance.bufnr, "modifiable", true)
     tree_instance:set_nodes(new_nodes)
     M.restore_expansion_explicit(tree_instance)
     tree_instance:render()
+    vim.api.nvim_buf_set_option(tree_instance.bufnr, "modifiable", false)
+    
     active_tree = tree_instance
 end
 

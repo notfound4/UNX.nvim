@@ -287,12 +287,56 @@ function M.toggle_favorite(tree)
     local ctx = require("UNX.context.uproject").get()
     local project_root = ctx.project_root or require("UNL.finder").project.find_project_root(vim.loop.cwd())
     
-    local added, msg = favorites_cache.toggle(path, project_root)
-    local icon = added and "★ " or "☆ "
-    -- ★修正
-    logger.get().info(icon .. msg .. ": " .. vim.fn.fnamemodify(path, ":t"))
-    
-    require("UNX.ui.view.uproject").refresh(tree)
+    -- Check if already a favorite (for direct removal)
+    local favorites = favorites_cache.load(project_root)
+    local is_already_fav = false
+    local norm_path = unl_path.normalize(path)
+    for _, item in ipairs(favorites) do
+        if not item.is_folder and unl_path.normalize(item.path) == norm_path then
+            is_already_fav = true
+            break
+        end
+    end
+
+    if is_already_fav then
+        local _, msg = favorites_cache.toggle(path, project_root)
+        logger.get().info("☆ " .. msg .. ": " .. vim.fn.fnamemodify(path, ":t"))
+        require("UNX.ui.view.uproject").refresh(tree)
+        return
+    end
+
+    -- Adding new favorite: check for folders
+    local folders = favorites_cache.get_folders(project_root)
+    if #folders <= 1 then
+        -- Only "Default" exists, add directly
+        local added, msg = favorites_cache.toggle(path, project_root, "Default")
+        local icon = added and "★ " or "☆ "
+        logger.get().info(icon .. msg .. ": " .. vim.fn.fnamemodify(path, ":t"))
+        require("UNX.ui.view.uproject").refresh(tree)
+    else
+        -- Use UNL picker to select folder
+        local picker_items = {}
+        for _, f in ipairs(folders) do
+            table.insert(picker_items, { label = f, value = f })
+        end
+
+        unl_picker.open({
+            kind = "unx_favorites_add_to_folder",
+            title = "Add to Favorites folder",
+            items = picker_items,
+            conf = unx_config.get(),
+            preview_enabled = false,
+            on_submit = function(selection)
+                if selection then
+                    local choice = selection
+                    local added, msg = favorites_cache.toggle(path, project_root, choice)
+                    local icon = added and "★ " or "☆ "
+                    logger.get().info(icon .. msg .. " (" .. choice .. "): " .. vim.fn.fnamemodify(path, ":t"))
+                    require("UNX.ui.view.uproject").refresh(tree)
+                end
+            end,
+        })
+    end
 end
 
 function M.find_files_recursive(tree)
