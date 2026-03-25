@@ -11,72 +11,81 @@ M.ROOT_TYPE = "favorites_root"
 
 function M.create_children_nodes(project_root)
     local favorites = favorites_cache.load(project_root)
-    local nodes = {}
     
-    local folder_map = {}
-    local folders = {}
+    local folder_defs = {}
+    local items_by_folder = {}
     local direct_items = {}
 
-    -- 1. フォルダ定義とアイテムを分離
+    -- 1. データの整理
     for _, item in ipairs(favorites) do
         if item.is_folder then
-            table.insert(folders, item)
-            folder_map[item.name] = { node = nil, children = {} }
+            table.insert(folder_defs, item)
         else
-            if item.folder and item.folder ~= "Default" then
-                if not folder_map[item.folder] then
-                    -- フォルダ定義がないが指定されている場合（削除された場合など）
-                    folder_map[item.folder] = { node = nil, children = {} }
-                    table.insert(folders, { name = item.folder, is_folder = true })
-                end
-                table.insert(folder_map[item.folder].children, item)
-            else
+            local f_name = item.folder or "Default"
+            if f_name == "Default" then
                 table.insert(direct_items, item)
+            else
+                if not items_by_folder[f_name] then items_by_folder[f_name] = {} end
+                table.insert(items_by_folder[f_name], item)
             end
         end
     end
 
-    -- 2. フォルダノードの作成
-    for _, f in ipairs(folders) do
-        local f_children = {}
-        for _, item in ipairs(folder_map[f.name].children) do
-            local is_dir = vim.fn.isdirectory(item.path) == 1
-            table.insert(f_children, Tree.Node({
-                text = item.name,
-                id = "fav_item_" .. unl_path.normalize(item.path),
-                path = item.path,
-                type = is_dir and "directory" or "file",
-                extra = { uep_type = "fs", is_favorite_item = true, project_root = project_root }
-            }))
+    -- 2. 再帰的にノードを構築する関数
+    local function build_recursive(parent_name)
+        local nodes = {}
+
+        -- この親を持つフォルダを探して追加
+        for _, f in ipairs(folder_defs) do
+            if f.parent == parent_name then
+                local f_children = build_recursive(f.name)
+                
+                table.insert(nodes, Tree.Node({
+                    text = f.name,
+                    id = "fav_folder_" .. f.name,
+                    type = "directory",
+                    _has_children = #f_children > 0,
+                    extra = { uep_type = "fs", is_favorite_folder = true, project_root = project_root }
+                }, f_children))
+            end
         end
-        
-        -- フォルダ内アイテムを拡張子なしのファイル名でソート
-        table.sort(f_children, function(a, b)
+
+        -- このフォルダに属するアイテムを追加
+        if parent_name and items_by_folder[parent_name] then
+            for _, item in ipairs(items_by_folder[parent_name]) do
+                local is_dir = vim.fn.isdirectory(item.path) == 1
+                table.insert(nodes, Tree.Node({
+                    text = item.name,
+                    id = "fav_item_" .. unl_path.normalize(item.path),
+                    path = item.path,
+                    type = is_dir and "directory" or "file",
+                    extra = { uep_type = "fs", is_favorite_item = true, project_root = project_root }
+                }))
+            end
+        end
+
+        -- ソート (フォルダ優先、拡張子なし名前順)
+        table.sort(nodes, function(a, b)
+            local a_is_dir = a.type == "directory"
+            local b_is_dir = b.type == "directory"
+            if a_is_dir ~= b_is_dir then return a_is_dir end
+            
             local a_base = vim.fn.fnamemodify(a.text, ":r"):lower()
             local b_base = vim.fn.fnamemodify(b.text, ":r"):lower()
-            if a_base == b_base then
-                return a.text:lower() < b.text:lower()
-            end
+            if a_base == b_base then return a.text:lower() < b.text:lower() end
             return a_base < b_base
         end)
 
-        table.insert(nodes, Tree.Node({
-            text = f.name,
-            id = "fav_folder_" .. f.name,
-            type = "directory",
-            _has_children = #f_children > 0,
-            extra = { uep_type = "fs", is_favorite_folder = true, project_root = project_root }
-        }, f_children))
+        return nodes
     end
 
-    -- フォルダ自体を名前順でソート
-    table.sort(nodes, function(a, b) return a.text:lower() < b.text:lower() end)
-
-    -- 3. 直下のアイテムを追加
-    local direct_nodes = {}
+    -- 3. ルート（Default/直下）から開始
+    local final_nodes = build_recursive(nil)
+    
+    -- 直下アイテム（Default属）を追加（build_recursive(nil) でカバーされない場合用）
     for _, item in ipairs(direct_items) do
         local is_dir = vim.fn.isdirectory(item.path) == 1
-        table.insert(direct_nodes, Tree.Node({
+        table.insert(final_nodes, Tree.Node({
             text = item.name,
             id = "fav_item_" .. unl_path.normalize(item.path),
             path = item.path,
@@ -84,22 +93,19 @@ function M.create_children_nodes(project_root)
             extra = { uep_type = "fs", is_favorite_item = true, project_root = project_root }
         }))
     end
-
-    -- 直下アイテムも拡張子なしでソート
-    table.sort(direct_nodes, function(a, b)
+    
+    -- 再度ソート
+    table.sort(final_nodes, function(a, b)
+        local a_is_dir = a.type == "directory"
+        local b_is_dir = b.type == "directory"
+        if a_is_dir ~= b_is_dir then return a_is_dir end
         local a_base = vim.fn.fnamemodify(a.text, ":r"):lower()
         local b_base = vim.fn.fnamemodify(b.text, ":r"):lower()
-        if a_base == b_base then
-            return a.text:lower() < b.text:lower()
-        end
+        if a_base == b_base then return a.text:lower() < b.text:lower() end
         return a_base < b_base
     end)
 
-    for _, n in ipairs(direct_nodes) do
-        table.insert(nodes, n)
-    end
-
-    return nodes
+    return final_nodes
 end
 
 function M.create_root_node(is_expanded, project_root, children)

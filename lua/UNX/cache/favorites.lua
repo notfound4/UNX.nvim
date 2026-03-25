@@ -75,20 +75,21 @@ function M.toggle(target_path, project_root, folder_name)
   end
 end
 
-function M.add_folder(folder_name, project_root)
+function M.add_folder(folder_name, project_root, parent_folder)
   if not folder_name or folder_name == "" then return false end
   local favorites = M.load(project_root)
   
-  -- 重複チェック
+  -- 重複チェック (同じ親の下に同名フォルダは不可)
   for _, item in ipairs(favorites) do
-    if item.is_folder and item.name == folder_name then
-      return false, "Folder already exists"
+    if item.is_folder and item.name == folder_name and item.parent == parent_folder then
+      return false, "Folder already exists in this location"
     end
   end
   
   table.insert(favorites, {
     is_folder = true,
     name = folder_name,
+    parent = parent_folder, -- 追加: 親フォルダ名
     added_at = os.time()
   })
   M.save(favorites, project_root)
@@ -98,11 +99,23 @@ end
 function M.remove_folder(folder_name, project_root)
     local favorites = M.load(project_root)
     local new_list = {}
+    
+    -- 削除対象のフォルダの親を取得しておく
+    local target_parent = nil
+    for _, item in ipairs(favorites) do
+        if item.is_folder and item.name == folder_name then
+            target_parent = item.parent
+            break
+        end
+    end
+
     for _, item in ipairs(favorites) do
         if not (item.is_folder and item.name == folder_name) then
-            -- フォルダ削除時、中身は Default に戻す
-            if item.folder == folder_name then
-                item.folder = "Default"
+            -- フォルダ削除時、その直下の子要素（アイテム/フォルダ）は親階層へ移動
+            if item.is_folder then
+                if item.parent == folder_name then item.parent = target_parent end
+            else
+                if item.folder == folder_name then item.folder = target_parent or "Default" end
             end
             table.insert(new_list, item)
         end
@@ -110,13 +123,25 @@ function M.remove_folder(folder_name, project_root)
     M.save(new_list, project_root)
 end
 
-function M.move_to_folder(target_path, folder_name, project_root)
+function M.move_to_folder(target_name, dest_folder, project_root, is_target_folder)
     local favorites = M.load(project_root)
-    local norm_target = unl_path.normalize(target_path)
-    for _, item in ipairs(favorites) do
-        if not item.is_folder and unl_path.normalize(item.path) == norm_target then
-            item.folder = folder_name
-            break
+    if is_target_folder then
+        -- フォルダを移動させる場合
+        if target_name == dest_folder then return end
+        for _, item in ipairs(favorites) do
+            if item.is_folder and item.name == target_name then
+                item.parent = dest_folder
+                break
+            end
+        end
+    else
+        -- アイテムを移動させる場合
+        local norm_target = unl_path.normalize(target_name)
+        for _, item in ipairs(favorites) do
+            if not item.is_folder and unl_path.normalize(item.path) == norm_target then
+                item.folder = dest_folder
+                break
+            end
         end
     end
     M.save(favorites, project_root)
@@ -127,10 +152,11 @@ function M.rename_folder(old_name, new_name, project_root)
     local favorites = M.load(project_root)
     
     for _, item in ipairs(favorites) do
-        if item.is_folder and item.name == old_name then
-            item.name = new_name
-        elseif item.folder == old_name then
-            item.folder = new_name
+        if item.is_folder then
+            if item.name == old_name then item.name = new_name end
+            if item.parent == old_name then item.parent = new_name end
+        else
+            if item.folder == old_name then item.folder = new_name end
         end
     end
     M.save(favorites, project_root)
@@ -139,13 +165,38 @@ end
 
 function M.get_folders(project_root)
     local favorites = M.load(project_root)
-    local folders = { "Default" }
+    local folder_defs = {}
     for _, item in ipairs(favorites) do
-        if item.is_folder then
-            table.insert(folders, item.name)
-        end
+        if item.is_folder then table.insert(folder_defs, item) end
     end
-    return folders
+
+    -- 階層表示用のフルパスを生成するローカル関数
+    local function get_full_path(name)
+        if not name or name == "Default" then return "" end
+        for _, f in ipairs(folder_defs) do
+            if f.name == name then
+                local parent_path = get_full_path(f.parent)
+                if parent_path == "" then return name end
+                return parent_path .. "/" .. name
+            end
+        end
+        return name
+    end
+
+    local folder_paths = { "Default" }
+    for _, f in ipairs(folder_defs) do
+        local path = get_full_path(f.name)
+        if path ~= "" then table.insert(folder_paths, path) end
+    end
+    
+    -- 名前順でソート
+    table.sort(folder_paths, function(a, b)
+        if a == "Default" then return true end
+        if b == "Default" then return false end
+        return a:lower() < b:lower()
+    end)
+
+    return folder_paths
 end
 
 return M

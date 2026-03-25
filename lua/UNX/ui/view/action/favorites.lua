@@ -10,14 +10,22 @@ local unx_config = require("UNX.config")
 local M = {}
 
 function M.add_folder(tree)
+    local node = tree:get_node()
+    local parent_folder = nil
+    if node and node.extra and node.extra.is_favorite_folder then
+        parent_folder = node.text
+    end
+
     local ctx = ctx_uproject.get()
     local project_root = ctx.project_root
     if not project_root then return end
 
+    local title = parent_folder and ("[ New Folder under " .. parent_folder .. " ]") or "[ New Favorite Folder ]"
+
     local input = Input({
         position = "50%",
         size = { width = 40 },
-        border = { style = "rounded", text = { top = "[ New Favorite Folder ]", top_align = "center" } },
+        border = { style = "rounded", text = { top = title, top_align = "center" } },
         win_options = { winblend = 10, winhighlight = "Normal:Normal,FloatBorder:FloatBorder" },
     }, {
         prompt = " Name: ",
@@ -25,7 +33,7 @@ function M.add_folder(tree)
         on_close = function() end,
         on_submit = function(value)
             if value and value ~= "" then
-                local success, err = favorites_cache.add_folder(value, project_root)
+                local success, err = favorites_cache.add_folder(value, project_root, parent_folder)
                 if success then
                     vim.notify(string.format("Created favorite folder: %s", value), vim.log.levels.INFO)
                     -- ツリーをリフレッシュ
@@ -44,8 +52,8 @@ end
 
 function M.move_item(tree)
     local node = tree:get_node()
-    if not node or not node.extra or not node.extra.is_favorite_item then
-        return vim.notify("Select a favorite item to move", vim.log.levels.WARN)
+    if not node or not node.extra or (not node.extra.is_favorite_item and not node.extra.is_favorite_folder) then
+        return vim.notify("Select a favorite item or folder to move", vim.log.levels.WARN)
     end
 
     local ctx = ctx_uproject.get()
@@ -55,20 +63,27 @@ function M.move_item(tree)
     local folders = favorites_cache.get_folders(project_root)
     local items = {}
     for _, f in ipairs(folders) do
-        table.insert(items, { label = f, value = f })
+        -- 自分自身（フォルダの場合）には移動できない
+        if not (node.extra.is_favorite_folder and f == node.text) then
+            table.insert(items, { label = f, value = f })
+        end
     end
     
     unl_picker.open({
         kind = "unx_favorites_move",
-        title = "Move to folder",
+        title = string.format("Move '%s' to folder", node.text),
         items = items,
         conf = unx_config.get(),
         preview_enabled = false,
         on_submit = function(selection)
             if selection then
-                local choice = selection
-                favorites_cache.move_to_folder(node.path, choice, project_root)
-                vim.notify(string.format("Moved %s to %s", node.text, choice), vim.log.levels.INFO)
+                local choice_path = selection
+                local parts = vim.split(choice_path, "/", { plain = true })
+                local choice = parts[#parts] -- 最後の名前を取得
+
+                local target_id = node.extra.is_favorite_folder and node.text or node.path
+                favorites_cache.move_to_folder(target_id, choice, project_root, node.extra.is_favorite_folder)
+                vim.notify(string.format("Moved %s to %s", node.text, choice_path), vim.log.levels.INFO)
                 local explorer_ui = require("UNX.ui.explorer")
                 explorer_ui.refresh()
             end

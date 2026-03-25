@@ -328,10 +328,13 @@ function M.toggle_favorite(tree)
             preview_enabled = false,
             on_submit = function(selection)
                 if selection then
-                    local choice = selection
+                    local choice_path = selection
+                    local parts = vim.split(choice_path, "/", { plain = true })
+                    local choice = parts[#parts] -- 最後の名前を取得
+
                     local added, msg = favorites_cache.toggle(path, project_root, choice)
                     local icon = added and "★ " or "☆ "
-                    logger.get().info(icon .. msg .. " (" .. choice .. "): " .. vim.fn.fnamemodify(path, ":t"))
+                    logger.get().info(icon .. msg .. " (" .. choice_path .. "): " .. vim.fn.fnamemodify(path, ":t"))
                     require("UNX.ui.view.uproject").refresh(tree)
                 end
             end,
