@@ -50,6 +50,16 @@ function M.create_children_nodes(project_root)
             }))
         end
         
+        -- フォルダ内アイテムを拡張子なしのファイル名でソート
+        table.sort(f_children, function(a, b)
+            local a_base = vim.fn.fnamemodify(a.text, ":r"):lower()
+            local b_base = vim.fn.fnamemodify(b.text, ":r"):lower()
+            if a_base == b_base then
+                return a.text:lower() < b.text:lower()
+            end
+            return a_base < b_base
+        end)
+
         table.insert(nodes, Tree.Node({
             text = f.name,
             id = "fav_folder_" .. f.name,
@@ -59,16 +69,34 @@ function M.create_children_nodes(project_root)
         }, f_children))
     end
 
+    -- フォルダ自体を名前順でソート
+    table.sort(nodes, function(a, b) return a.text:lower() < b.text:lower() end)
+
     -- 3. 直下のアイテムを追加
+    local direct_nodes = {}
     for _, item in ipairs(direct_items) do
         local is_dir = vim.fn.isdirectory(item.path) == 1
-        table.insert(nodes, Tree.Node({
+        table.insert(direct_nodes, Tree.Node({
             text = item.name,
             id = "fav_item_" .. unl_path.normalize(item.path),
             path = item.path,
             type = is_dir and "directory" or "file",
             extra = { uep_type = "fs", is_favorite_item = true, project_root = project_root }
         }))
+    end
+
+    -- 直下アイテムも拡張子なしでソート
+    table.sort(direct_nodes, function(a, b)
+        local a_base = vim.fn.fnamemodify(a.text, ":r"):lower()
+        local b_base = vim.fn.fnamemodify(b.text, ":r"):lower()
+        if a_base == b_base then
+            return a.text:lower() < b.text:lower()
+        end
+        return a_base < b_base
+    end)
+
+    for _, n in ipairs(direct_nodes) do
+        table.insert(nodes, n)
     end
 
     return nodes
